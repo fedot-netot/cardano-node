@@ -974,20 +974,20 @@ makeSignedTransaction witnesses (ShelleyTxBody txbody) =
         Shelley.SNothing -- (Shelley.maybeToStrictMaybe txmetadata)
 
 
-byronKeyWitness :: NetworkId -> SigningKey ByronKey -> TxBody era -> Witness era
-byronKeyWitness nw (ByronSigningKey sk) (ByronTxBody txbody) =
+byronKeyWitness :: NetworkId -> TxBody era -> SigningKey ByronKey -> Witness era
+byronKeyWitness nw (ByronTxBody txbody) (ByronSigningKey sk) =
     ByronKeyWitness $
       Byron.VKWitness
         (Byron.toVerification sk)
-        (Byron.sign pm Byron.SignTx sk (Byron.TxSigData txHash))
+        (Byron.sign pm Byron.SignTx sk (Byron.TxSigData txhash))
   where
-    txHash :: Byron.Hash Byron.Tx
-    txHash = Byron.hashDecoded txbody
+    txhash :: Byron.Hash Byron.Tx
+    txhash = Byron.hashDecoded txbody
 
     pm :: Byron.ProtocolMagicId
     pm = toByronProtocolMagicId nw
 
-byronKeyWitness nw (ByronSigningKey sk) (ShelleyTxBody txbody) =
+byronKeyWitness nw (ShelleyTxBody txbody) (ByronSigningKey sk) =
     ShelleyBootstrapWitness $
       -- Byron era witnesses were weird. This reveals all that weirdness.
       Shelley.BootstrapWitness {
@@ -1009,17 +1009,16 @@ byronKeyWitness nw (ByronSigningKey sk) (ShelleyTxBody txbody) =
     -- signature using this extended signing key directly.
     --
     signature :: Shelley.SignedDSIGN ShelleyCrypto
-                                     (Shelley.Hash ShelleyCrypto
-                                                  (Shelley.TxBody ShelleyCrypto))
+                  (Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto))
     signature = fromByronSignature $
                   Byron.sign
                     (toByronProtocolMagicId nw)
                     Byron.SignTx
                     sk
-                    (Byron.TxSigData (toByronHash txHash))
+                    (Byron.TxSigData (toByronHash txhash))
 
-    txHash :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
-    txHash = Crypto.hash txbody
+    txhash :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
+    txhash = Crypto.hash txbody
 
     -- The Byron crypto signing code wants a Byron hash of a Byron tx body
     -- but we have a Shelley hash of a Shelley tx body. Of course the
@@ -1052,16 +1051,42 @@ byronKeyWitness nw (ByronSigningKey sk) (ShelleyTxBody txbody) =
                   Byron.aaNetworkMagic     = toByronNetworkMagic nw
                 }
 
-
-shelleyKeyWitness :: SigningKey keyrole -> TxBody era -> Witness Shelley
-shelleyKeyWitness = undefined
--- this may need some class constraint on the keyrole, we can sign with:
+-- | The class of key roles that can be used to witness Shelley transactions.
 --
---  ByronKey     -- for utxo inputs at byron addresses
---  PaymentKey   -- for utxo inputs, including multi-sig
---  StakeKey     -- for stake addr withdrawals and retiring and pool owners
---  StakePoolKey -- for stake pool ops
---  GenesisDelegateKey -- for update proposals, MIR etc
+-- It includes:
+--
+-- * 'PaymentKey': for UTxO inputs, including multi-sig
+--
+-- * 'StakeKey': for reward account withdrawals, setting delegation choice,
+--     retiring stake addresses, and for stake pool certificates as owner
+--
+-- * 'StakePoolKey': for stake pool certificates as operator
+--
+-- * 'GenesisDelegateKey': for update proposals, MIR certs etc
+--
+-- * 'GenesisUTxOKey': for UTxO inputs from the genesis UTxO
+--
+class Key keyrole => WinessKey keyrole where
+    toShelleyWitnessSigningKey :: SigningKey keyrole
+                               -> Shelley.SignKeyDSIGN ShelleyCrypto
+
+shelleyKeyWitness :: WinessKey keyrole
+                  => TxBody Shelley
+                  -> SigningKey keyrole
+                  -> Witness Shelley
+shelleyKeyWitness (ShelleyTxBody txbody) sk =
+    ShelleyKeyWitness $
+      Shelley.WitVKey vk' signature
+  where
+    sk' = toShelleyWitnessSigningKey sk
+    vk' = Shelley.VKey (Crypto.deriveVerKeyDSIGN sk')
+
+    signature :: Shelley.SignedDSIGN ShelleyCrypto
+                  (Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto))
+    signature = Crypto.signedDSIGN () txhash sk'
+
+    txhash :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
+    txhash = Crypto.hash txbody
 
 
 -- order of signing keys must match txins
@@ -1069,13 +1094,20 @@ signByronTransaction :: NetworkId
                      -> TxBody Byron
                      -> [SigningKey ByronKey]
                      -> Tx Byron
-signByronTransaction = undefined
+signByronTransaction nw txbody sks =
+    makeSignedTransaction witnesses txbody
+  where
+    witnesses = map (byronKeyWitness nw txbody) sks
 
 -- signing keys is a set
-signShelleyTransaction :: TxBody Shelley
-                       -> [SigningKey Shelley]
+signShelleyTransaction :: WinessKey keyrole
+                       => TxBody Shelley
+                       -> [SigningKey keyrole]
                        -> Tx Shelley
-signShelleyTransaction = undefined
+signShelleyTransaction txbody sks =
+    makeSignedTransaction witnesses txbody
+  where
+    witnesses = map (shelleyKeyWitness txbody) sks
 
 
 -- ----------------------------------------------------------------------------
@@ -1539,6 +1571,9 @@ instance Key PaymentKey where
     verificationKeyHash (PaymentVerificationKey vkey) =
         PaymentKeyHash (Shelley.hashKey vkey)
 
+instance WinessKey PaymentKey where
+    toShelleyWitnessSigningKey (PaymentSigningKey sk) = sk
+
 newtype instance Hash PaymentKey =
     PaymentKeyHash (Shelley.KeyHash Shelley.Payment ShelleyCrypto)
 
@@ -1607,6 +1642,9 @@ instance Key StakeKey where
     verificationKeyHash :: VerificationKey StakeKey -> Hash StakeKey
     verificationKeyHash (StakeVerificationKey vkey) =
         StakeKeyHash (Shelley.hashKey vkey)
+
+instance WinessKey StakeKey where
+    toShelleyWitnessSigningKey (StakeSigningKey sk) = sk
 
 newtype instance Hash StakeKey =
     StakeKeyHash (Shelley.KeyHash Shelley.Staking ShelleyCrypto)
@@ -1734,6 +1772,9 @@ instance Key GenesisDelegateKey where
     verificationKeyHash (GenesisDelegateVerificationKey vkey) =
         GenesisDelegateKeyHash (Shelley.hashKey vkey)
 
+instance WinessKey GenesisDelegateKey where
+    toShelleyWitnessSigningKey (GenesisDelegateSigningKey sk) = sk
+
 newtype instance Hash GenesisDelegateKey =
     GenesisDelegateKeyHash (Shelley.KeyHash Shelley.GenesisDelegate ShelleyCrypto)
 
@@ -1806,6 +1847,9 @@ instance Key GenesisUTxOKey where
     verificationKeyHash (GenesisUTxOVerificationKey vkey) =
         GenesisUTxOKeyHash (Shelley.hashKey vkey)
 
+instance WinessKey GenesisUTxOKey where
+    toShelleyWitnessSigningKey (GenesisUTxOSigningKey sk) = sk
+
 newtype instance Hash GenesisUTxOKey =
     GenesisUTxOKeyHash (Shelley.KeyHash Shelley.Payment ShelleyCrypto)
 
@@ -1869,6 +1913,9 @@ instance Key StakePoolKey where
     verificationKeyHash :: VerificationKey StakePoolKey -> Hash StakePoolKey
     verificationKeyHash (StakePoolVerificationKey vkey) =
         StakePoolKeyHash (Shelley.hashKey vkey)
+
+instance WinessKey StakePoolKey where
+    toShelleyWitnessSigningKey (StakePoolSigningKey sk) = sk
 
 newtype instance Hash StakePoolKey =
     StakePoolKeyHash (Shelley.KeyHash Shelley.StakePool ShelleyCrypto)
