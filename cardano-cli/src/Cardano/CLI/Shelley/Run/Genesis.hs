@@ -35,6 +35,7 @@ import           Cardano.Api.Typed (AsType (..), Error (..), FileError, Hash (..
                    OperationalCertificateIssueCounter (..), TextEnvelopeError,
                    VerificationKey, VrfKey, generateSigningKey, getVerificationKey,
                    readFileTextEnvelope, verificationKeyHash, writeFileTextEnvelope)
+import qualified Cardano.Api.Typed as Typed
 
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosStandardCrypto)
@@ -282,13 +283,13 @@ runGenesisTxIn (VerificationKeyFile vkeyPath) network mOutFile = do
         AddressShelleyReward _rwdAcct -> left ShelleyGenesisCmdOnlyShelleyAddressesNotReward
         AddressByron _addr -> left ShelleyGenesisCmdOnlyShelleyAddresses
   where
-    fromShelleyTxIn :: Shelley.TxIn TPraosStandardCrypto -> TxIn
+    fromShelleyTxIn :: Shelley.TxIn TPraosStandardCrypto -> Typed.TxIn
     fromShelleyTxIn (Shelley.TxIn txid txix) =
-        TxIn (fromShelleyTxId txid) (fromIntegral txix)
+        Typed.TxIn (fromShelleyTxId txid) (fromIntegral txix)
 
-    fromShelleyTxId :: Shelley.TxId TPraosStandardCrypto -> TxId
+    fromShelleyTxId :: Shelley.TxId TPraosStandardCrypto -> Typed.TxId
     fromShelleyTxId (Shelley.TxId (Crypto.UnsafeHash h)) =
-        TxId (Crypto.UnsafeHash h)
+        Typed.TxId (Crypto.UnsafeHash h)
 
 
 runGenesisAddr :: VerificationKeyFile -> Network -> Maybe OutputFile -> ExceptT ShelleyGenesisCmdError IO ()

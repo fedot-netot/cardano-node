@@ -45,13 +45,16 @@ module Cardano.Api.View
 
 import           Cardano.Api.CBOR
 import           Cardano.Api.Types
+import           Cardano.Api.Typed (AsType(..), SerialiseAsCBOR)
+import qualified Cardano.Api.Typed as Typed
 import           Cardano.Api.Error
 
 import           Cardano.Api.TextView
 
 import           Cardano.Prelude
 
-import           Control.Monad.Trans.Except.Extra (handleIOExceptT, hoistEither, runExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT,
+                   hoistEither, runExceptT)
 
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.ByteString.Char8 as BS
@@ -246,11 +249,13 @@ readTxSigned path =
     bs <- handleIOExceptT (ApiErrorIO path) $ BS.readFile path
     hoistEither $ parseTxSignedView bs
 
-readTxUnsigned :: FilePath -> IO (Either ApiError TxUnsigned)
-readTxUnsigned path =
+readTxUnsigned
+  :: SerialiseAsCBOR txbody
+  => AsType txbody -> FilePath -> IO (Either ApiError txbody)
+readTxUnsigned proxy path =
   runExceptT $ do
     bs <- handleIOExceptT (ApiErrorIO path) $ BS.readFile path
-    hoistEither $ parseTxUnsignedView bs
+    firstExceptT ApiErrorCBOR . hoistEither $ Typed.deserialiseFromCBOR proxy bs
 
 readUpdate :: FilePath -> IO (Either ApiError Update)
 readUpdate path =
@@ -293,10 +298,12 @@ writeTxSigned path kp =
   runExceptT .
     handleIOExceptT (ApiErrorIO path) $ BS.writeFile path (renderTxSignedView kp)
 
-writeTxUnsigned :: FilePath -> TxUnsigned -> IO (Either ApiError ())
-writeTxUnsigned path kp =
+writeTxUnsigned
+  :: SerialiseAsCBOR txbody
+  => AsType txbody -> FilePath -> txbody -> IO (Either ApiError ())
+writeTxUnsigned _ path tbody =
   runExceptT .
-    handleIOExceptT (ApiErrorIO path) $ BS.writeFile path (renderTxUnsignedView kp)
+    handleIOExceptT (ApiErrorIO path) $ BS.writeFile path (Typed.serialiseToCBOR tbody)
 
 writeUpdate :: FilePath -> Update -> IO (Either ApiError ())
 writeUpdate path kp =

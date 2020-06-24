@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Test.Cardano.Api.Typed.Gen
   ( genAddressByron
   , genAddressShelley
@@ -5,6 +7,7 @@ module Test.Cardano.Api.Typed.Gen
   , genOperationalCertificateIssueCounter
   , genSigningKey
   , genStakeAddress
+  , genTxIn
   , genVerificationKey
   ) where
 
@@ -14,6 +17,7 @@ import           Cardano.Prelude
 
 import           Control.Monad.Fail (fail)
 
+import qualified Shelley.Spec.Ledger.Keys as Shelley
 import           Ouroboros.Network.Magic (NetworkMagic(..))
 
 import           Hedgehog (Gen)
@@ -32,6 +36,9 @@ genAddressShelley =
     [ makeShelleyAddress <$> genNetworkId <*> genPaymentCredential <*> genStakeAddressReference
     , makeByronAddress <$> genVerificationKey AsByronKey <*> genNetworkId
     ]
+
+genUnitHash :: Gen (Shelley.Hash ShelleyCrypto ())
+genUnitHash = return $ hash ()
 
 genKESPeriod :: Gen KESPeriod
 genKESPeriod = KESPeriod <$> Gen.word Range.constantBounded
@@ -126,5 +133,14 @@ genTxShelley =
     , makeShelleyTransaction
     ]
 -}
+
+genTxIn :: Gen TxIn
+genTxIn = do
+  index <- Gen.word Range.constantBounded
+  txHash <- genUnitHash
+  let txIndex = TxIx index
+      txId = TxId txHash
+  return $ TxIn txId txIndex
+
 genVerificationKey :: Key keyrole => AsType keyrole -> Gen (VerificationKey keyrole)
 genVerificationKey roletoken = getVerificationKey <$> genSigningKey roletoken

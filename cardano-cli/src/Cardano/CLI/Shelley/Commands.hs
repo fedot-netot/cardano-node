@@ -39,6 +39,7 @@ import           Data.Text (Text)
 
 import           Cardano.Api
 import           Cardano.Api.Shelley.OCert (KESPeriod(..))
+import qualified Cardano.Api.Typed as Typed
 import           Cardano.Slotting.Slot (EpochNo (..))
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
 
@@ -92,7 +93,7 @@ data StakeAddressCmd
 
 data TransactionCmd
   = TxBuildRaw
-      [TxIn]
+      [Typed.TxIn]
       [TxOut]
       SlotNo
       Lovelace
