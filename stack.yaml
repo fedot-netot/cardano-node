@@ -11,6 +11,10 @@ ghc-options:
   cardano-config:       -Wall -fwarn-redundant-constraints
   cardano-node:         -Wall -fwarn-redundant-constraints
 
+flags:
+  cardano-crypto-praos:
+    external-libsodium-vrf: false
+
 allow-newer: true
 
 extra-deps:
@@ -91,6 +95,7 @@ extra-deps:
       - binary/test
       - cardano-crypto-class
       - slotting
+      - cardano-crypto-praos
 
     # Following deps are for cardano-shell
   - git: https://github.com/input-output-hk/cardano-shell
