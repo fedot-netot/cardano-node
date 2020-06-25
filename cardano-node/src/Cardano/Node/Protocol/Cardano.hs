@@ -3,7 +3,7 @@
 
 {-# OPTIONS_GHC -Wno-orphans  #-}
 
-module Cardano.Config.Cardano.Protocol
+module Cardano.Node.Protocol.Cardano
   (
     -- * Protocol exposing the specific type
     -- | Use this when you need the specific instance
@@ -12,10 +12,6 @@ module Cardano.Config.Cardano.Protocol
     -- * Protocols hiding the specific type
     -- | Use this when you want to handle protocols generically
   , mkSomeConsensusProtocolCardano
-
-    -- * Client support
-  , mkNodeClientProtocolCardano
-  , mkSomeNodeClientProtocolCardano
 
     -- * Errors
   , CardanoProtocolInstantiationError(..)
@@ -27,8 +23,6 @@ import           Prelude
 import qualified Data.Text as T
 import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT)
-
-import           Cardano.Chain.Slotting (EpochSlots)
 
 import qualified Cardano.Chain.Update as Byron
 
@@ -46,16 +40,19 @@ import qualified Shelley.Spec.Ledger.PParams as Shelley
 import           Cardano.Config.Types
                    (NodeByronProtocolConfiguration(..),
                     NodeShelleyProtocolConfiguration(..),
-                    ProtocolFilepaths(..), SomeConsensusProtocol(..),
-                    SomeNodeClientProtocol(..),
+                    NodeHardForkProtocolConfiguration(..),
+                    ProtocolFilepaths(..),
                     HasKESMetricsData(..), KESMetricsData(..))
 
 import           Cardano.TracingOrphanInstances.Byron ()
 import           Cardano.TracingOrphanInstances.Shelley ()
 import           Cardano.TracingOrphanInstances.HardFork ()
 
-import qualified Cardano.Config.Byron.Protocol as Byron
-import qualified Cardano.Config.Shelley.Protocol as Shelley
+import qualified Cardano.Node.Protocol.Byron as Byron
+import qualified Cardano.Node.Protocol.Shelley as Shelley
+
+import           Cardano.Node.Protocol.Types
+
 
 
 --TODO: move ToObject tracing instances to Cardano.TracingOrphanInstances.Consensus
@@ -63,26 +60,6 @@ import qualified Cardano.Config.Shelley.Protocol as Shelley
 instance HasKESMetricsData (CardanoBlock c) where
     getKESMetricsData _forgeState = NoKESMetricsData
     --TODO distinguish on the era and use getKESMetricsData on the appropriate era
-
-
-------------------------------------------------------------------------------
--- Real Cardano protocol, client support
---
-
-mkNodeClientProtocolCardano :: EpochSlots
-                            -> SecurityParam
-                            -> ProtocolClient (CardanoBlock TPraosStandardCrypto)
-                                              ProtocolCardano
-mkNodeClientProtocolCardano epochSlots securityParam =
-    ProtocolClientCardano epochSlots securityParam
-
-
-mkSomeNodeClientProtocolCardano :: EpochSlots
-                                -> SecurityParam
-                                -> SomeNodeClientProtocol
-mkSomeNodeClientProtocolCardano epochSlots securityParam =
-    SomeNodeClientProtocol
-      (mkNodeClientProtocolCardano epochSlots securityParam)
 
 
 ------------------------------------------------------------------------------
@@ -104,14 +81,15 @@ mkSomeNodeClientProtocolCardano epochSlots securityParam =
 mkSomeConsensusProtocolCardano
   :: NodeByronProtocolConfiguration
   -> NodeShelleyProtocolConfiguration
+  -> NodeHardForkProtocolConfiguration
   -> Maybe ProtocolFilepaths
   -> ExceptT CardanoProtocolInstantiationError IO SomeConsensusProtocol
-mkSomeConsensusProtocolCardano ncb ncs files =
+mkSomeConsensusProtocolCardano ncb ncs nch files =
 
     -- Applying the SomeConsensusProtocol here is a check that
     -- the type of mkConsensusProtocolCardano fits all the class
     -- constraints we need to run the protocol.
-    SomeConsensusProtocol <$> mkConsensusProtocolCardano ncb ncs files
+    SomeConsensusProtocol <$> mkConsensusProtocolCardano ncb ncs nch files
 
 
 -- | Instantiate 'Consensus.Protocol' for Byron specifically.
@@ -121,6 +99,7 @@ mkSomeConsensusProtocolCardano ncb ncs files =
 mkConsensusProtocolCardano
   :: NodeByronProtocolConfiguration
   -> NodeShelleyProtocolConfiguration
+  -> NodeHardForkProtocolConfiguration
   -> Maybe ProtocolFilepaths
   -> ExceptT CardanoProtocolInstantiationError IO
              (Consensus.Protocol IO (CardanoBlock TPraosStandardCrypto)
@@ -140,6 +119,10 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
                              npcShelleySupportedProtocolVersionMajor,
                              npcShelleySupportedProtocolVersionMinor,
                              npcShelleyMaxSupportedProtocolVersion
+                           }
+                           NodeHardForkProtocolConfiguration {
+                             npcTestShelleyHardForkAtEpoch,
+                             npcTestShelleyHardForkAtVersion
                            }
                            files = do
     byronGenesis <-
@@ -180,8 +163,26 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
         -- Hard fork parameters
         (Just 190) --TODO: Optimisation: once the epoch of the transition is
                    -- known, set this to the first shelley epoch.
-        (Consensus.NoHardCodedTransition (fromIntegral npcShelleyMaxSupportedProtocolVersion))
-        --TODO is this the right value?
+
+        -- What will trigger the hard fork?
+        (case npcTestShelleyHardForkAtEpoch of
+
+           -- This specifies the major protocol version number update that will
+           -- trigger us moving to the Shelley protocol.
+           --
+           -- Version 0 is Byron with Ouroboros classic
+           -- Version 1 is Byron with Ouroboros Permissive BFT
+           -- Version 2 is Shelley
+           --
+           -- But we also provide an override to allow for simpler test setups
+           -- such as triggering at the 0 -> 1 transition .
+           --
+           Nothing -> Consensus.NoHardCodedTransition
+                        (maybe 2 fromIntegral npcTestShelleyHardForkAtVersion)
+
+           -- Alternatively, for testing we can transition at a specific epoch.
+           --
+           Just epochNo -> Consensus.HardCodedTransitionAt epochNo)
 
 
 ------------------------------------------------------------------------------
@@ -205,4 +206,3 @@ renderCardanoProtocolInstantiationError
 renderCardanoProtocolInstantiationError
   (CardanoProtocolInstantiationErrorShelley err) =
     Shelley.renderShelleyProtocolInstantiationError err
-

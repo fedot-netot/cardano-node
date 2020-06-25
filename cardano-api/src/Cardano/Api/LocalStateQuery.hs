@@ -35,8 +35,8 @@ import           Cardano.Binary (decodeFull)
 import           Cardano.BM.Data.Tracer (ToLogObject (..), nullTracer)
 import           Cardano.BM.Trace (Trace, appendName, logInfo)
 
-import           Cardano.Config.Protocol ()
-import           Cardano.Config.Shelley.Protocol (mkNodeClientProtocolShelley)
+import           Cardano.Api.Protocol.Shelley (mkNodeClientProtocolShelley)
+import           Cardano.Api.Types ()
 import           Cardano.Config.Types (SocketPath (..))
 
 import qualified Codec.CBOR.Term as CBOR
@@ -208,7 +208,7 @@ queryLocalLedgerState
   => Network
   -> SocketPath
   -> Point blk
-  -> ExceptT LocalStateQueryError IO (Either LByteString (Ledger.LedgerState TPraosStandardCrypto))
+  -> ExceptT LocalStateQueryError IO (Either LByteString (Ledger.EpochState TPraosStandardCrypto))
 queryLocalLedgerState network socketPath point = do
   lbs <- fmap unSerialised <$>
             newExceptT . liftIO $

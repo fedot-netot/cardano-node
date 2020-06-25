@@ -30,6 +30,7 @@ module Cardano.Config.Types
     , NodeMockProtocolConfiguration (..)
     , NodeByronProtocolConfiguration (..)
     , NodeShelleyProtocolConfiguration (..)
+    , NodeHardForkProtocolConfiguration (..)
     , NodeHostAddress (..)
     , Protocol (..)
     , MockProtocol (..)
@@ -38,9 +39,7 @@ module Cardano.Config.Types
     , NodeCLI (..)
     , NodeProtocolMode (..)
     , SigningKeyFile (..)
-    , SomeConsensusProtocolConstraints
     , ProtocolFilepaths (..)
-    , SomeConsensusProtocol (..)
     , TopologyFile (..)
     , TraceConstraints
     , SocketPath (..)
@@ -49,7 +48,6 @@ module Cardano.Config.Types
     , Fd (..)
     , parseNodeConfiguration
     , parseNodeConfigurationFP
-    , SomeNodeClientProtocol(..)
     , parseNodeHostAddress
     ) where
 
@@ -66,20 +64,23 @@ import           Network.Socket (PortNumber)
 import           System.FilePath ((</>), takeDirectory)
 import           System.Posix.Types (Fd(Fd))
 
-import           Cardano.BM.Tracing (ToObject, Transformable)
-import qualified Cardano.Chain.Update as Update
-import           Cardano.Chain.Slotting (EpochSlots)
+import           Cardano.BM.Tracing (ToObject)
+
+import           Cardano.Slotting.Slot (EpochNo)
+
+import qualified Cardano.Chain.Update as Byron
+import qualified Cardano.Chain.Slotting as Byron (EpochSlots)
+
 import           Cardano.Crypto.KES.Class (Period)
 import           Cardano.Crypto.ProtocolMagic (RequiresNetworkMagic)
+
 import           Ouroboros.Consensus.Block (Header, BlockProtocol, ForgeState(..))
 import           Ouroboros.Consensus.Byron.Ledger.Block (ByronBlock)
-import qualified Ouroboros.Consensus.Cardano as Consensus (Protocol, ProtocolClient)
 import           Ouroboros.Consensus.HeaderValidation (OtherHeaderEnvelopeError)
 import           Ouroboros.Consensus.Ledger.Abstract (LedgerError)
 import           Ouroboros.Consensus.Ledger.SupportsMempool (GenTxId, HasTxId, HasTxs(..),
                    LedgerSupportsMempool(..))
 import           Ouroboros.Consensus.Mock.Ledger.Block (SimpleBlock)
-import           Ouroboros.Consensus.Node.Run (RunNode)
 import           Ouroboros.Consensus.NodeId (CoreNodeId(..))
 import           Ouroboros.Consensus.Protocol.Abstract (CannotLead, ValidationErr)
 import           Ouroboros.Consensus.Util.Condense (Condense (..))
@@ -89,6 +90,7 @@ import           Ouroboros.Consensus.Shelley.Protocol.Crypto.HotKey (HotKey (..)
 
 import           Ouroboros.Network.Block (HeaderHash, MaxSlotNo(..))
 
+import           Cardano.Config.LedgerQueries
 import           Cardano.Config.Orphanage ()
 import           Cardano.Config.TraceConfig
 import           Cardano.Crypto (RequiresNetworkMagic(..))
@@ -107,7 +109,7 @@ instance Show ConfigError where
 
 -- | Specify what the CBOR file is
 -- i.e a block, a tx, etc
-data CBORObject = CBORBlockByron EpochSlots
+data CBORObject = CBORBlockByron Byron.EpochSlots
                 | CBORDelegationCertificateByron
                 | CBORTxByron
                 | CBORUpdateProposalByron
@@ -234,6 +236,7 @@ data NodeProtocolConfiguration =
      | NodeProtocolConfigurationShelley NodeShelleyProtocolConfiguration
      | NodeProtocolConfigurationCardano NodeByronProtocolConfiguration
                                         NodeShelleyProtocolConfiguration
+                                        NodeHardForkProtocolConfiguration
   deriving Show
 
 data NodeMockProtocolConfiguration =
@@ -251,10 +254,10 @@ data NodeByronProtocolConfiguration =
      , npcByronPbftSignatureThresh :: !(Maybe Double)
 
        -- | Update application name.
-     , npcByronApplicationName     :: !Update.ApplicationName
+     , npcByronApplicationName     :: !Byron.ApplicationName
 
        -- | Application (ie software) version.
-     , npcByronApplicationVersion  :: !Update.NumSoftwareVersion
+     , npcByronApplicationVersion  :: !Byron.NumSoftwareVersion
 
        -- | These declare the version of the protocol that the node is prepared
        -- to run. This is usually the version of the protocol in use on the
@@ -290,6 +293,32 @@ data NodeShelleyProtocolConfiguration =
      }
   deriving Show
 
+-- | Configuration relating to a hard forks themselves, not the specific eras.
+--
+data NodeHardForkProtocolConfiguration =
+     NodeHardForkProtocolConfiguration {
+
+       -- | For testing purposes we support specifying that the hard fork
+       -- happens at an exact epoch number (ie the first epoch of the new era).
+       --
+       -- Obviously if this is used, all the nodes in the test cluster must be
+       -- configured the same, or they will disagree.
+       --
+       npcTestShelleyHardForkAtEpoch :: Maybe EpochNo
+
+       -- | For testing purposes we support specifying that the hard fork
+       -- happens at a given major protocol version. For example this can be
+       -- used to cause the Shelley hard fork to occur at the transition from
+       -- protocol version 0 to version 1 (rather than the default of from 1 to
+       -- 2) which can make the test setup simpler.
+       --
+       -- Obviously if this is used, all the nodes in the test cluster must be
+       -- configured the same, or they will disagree.
+       --
+     , npcTestShelleyHardForkAtVersion :: Maybe Word
+     }
+  deriving Show
+
 instance FromJSON NodeConfiguration where
   parseJSON =
     withObject "NodeConfiguration" $ \v -> do
@@ -321,6 +350,7 @@ instance FromJSON NodeConfiguration where
           CardanoProtocol ->
             NodeProtocolConfigurationCardano <$> parseByronProtocol v
                                              <*> parseShelleyProtocol v
+                                             <*> parseHardForkProtocol v
       pure NodeConfiguration {
              ncProtocolConfig
            , ncSocketPath
@@ -355,7 +385,7 @@ instance FromJSON NodeConfiguration where
                                          .!= RequiresNoMagic
         npcByronPbftSignatureThresh <- v .:? "PBftSignatureThreshold"
         npcByronApplicationName     <- v .:? "ApplicationName"
-                                         .!= Update.ApplicationName "cardano-sl"
+                                         .!= Byron.ApplicationName "cardano-sl"
         npcByronApplicationVersion  <- v .:? "ApplicationVersion" .!= 1
         protVerMajor                <- v .: "LastKnownBlockVersion-Major"
         protVerMinor                <- v .: "LastKnownBlockVersion-Minor"
@@ -396,6 +426,14 @@ instance FromJSON NodeConfiguration where
              , npcShelleyMaxSupportedProtocolVersion   = protVerMajroMax
              }
 
+      parseHardForkProtocol v = do
+        npcTestShelleyHardForkAtEpoch   <- v .:? "TestShelleyHardForkAtEpoch"
+        npcTestShelleyHardForkAtVersion <- v .:? "TestShelleyHardForkAtVersion"
+        pure NodeHardForkProtocolConfiguration {
+               npcTestShelleyHardForkAtEpoch,
+               npcTestShelleyHardForkAtVersion
+             }
+
 
 parseNodeConfigurationFP :: ConfigYamlFilePath -> IO NodeConfiguration
 parseNodeConfigurationFP (ConfigYamlFilePath fp) = do
@@ -428,9 +466,10 @@ instance AdjustFilePaths NodeProtocolConfiguration where
   adjustFilePaths f (NodeProtocolConfigurationShelley pc) =
     NodeProtocolConfigurationShelley (adjustFilePaths f pc)
 
-  adjustFilePaths f (NodeProtocolConfigurationCardano pcb pcs) =
+  adjustFilePaths f (NodeProtocolConfigurationCardano pcb pcs pch) =
     NodeProtocolConfigurationCardano (adjustFilePaths f pcb)
                                      (adjustFilePaths f pcs)
+                                     pch
 
 instance AdjustFilePaths NodeMockProtocolConfiguration where
   adjustFilePaths _f x = x -- Contains no file paths
@@ -590,19 +629,7 @@ instance ToJSON NodeHostAddress where
 -- Protocol & Tracing Related
 --------------------------------------------------------------------------------
 
-type SomeConsensusProtocolConstraints blk =
-     ( HasKESMetricsData blk
-     , RunNode blk
-     , TraceConstraints blk
-     , Transformable Text IO (ForgeState blk)
-     )
-
-data SomeConsensusProtocol where
-
-     SomeConsensusProtocol :: SomeConsensusProtocolConstraints blk
-                           => Consensus.Protocol IO blk (BlockProtocol blk)
-                           -> SomeConsensusProtocol
-
+--TODO: move all of these to cardano-node
 
 -- | KES-related data to be traced as metrics.
 data KESMetricsData
@@ -665,6 +692,7 @@ type TraceConstraints blk =
     , Condense (TxId (GenTx blk))
     , HasTxs blk
     , HasTxId (GenTx blk)
+    , LedgerQueries blk
     , Show (ApplyTxErr blk)
     , Show (GenTx blk)
     , Show (GenTxId blk)
@@ -679,14 +707,3 @@ type TraceConstraints blk =
     , ToObject (ValidationErr (BlockProtocol blk))
     , ToObject (CannotLead (BlockProtocol blk))
     )
-
---------------------------------------------------------------------------------
--- Node client requirements
---------------------------------------------------------------------------------
-
-data SomeNodeClientProtocol where
-
-     SomeNodeClientProtocol
-       :: RunNode blk
-       => Consensus.ProtocolClient blk (BlockProtocol blk)
-       -> SomeNodeClientProtocol
