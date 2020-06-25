@@ -92,6 +92,7 @@ module Cardano.Api.Typed (
     makeShelleyTransaction,
     SlotNo,
     TxExtraContent(..),
+    txExtraContentEmpty,
 
     -- * Signing transactions
     -- | Creating transaction witnesses one by one, or all in one go.
@@ -779,71 +780,16 @@ data TxExtraContent =
        txProtocolUpdates :: Maybe ProtocolUpdates
      }
 
+txExtraContentEmpty :: TxExtraContent
+txExtraContentEmpty =
+    TxExtraContent {
+      txMetadata        = Nothing,
+      txWithdrawals     = [],
+      txCertificates    = [],
+      txProtocolUpdates = Nothing
+    }
+
 type TxMetadata = Map Word64 Shelley.MetaDatum
-
-data Certificate =
-
-       CertificateStakeAddressRegistration
-         StakeCredential
-
-     | CertificateStakeAddressDeregistration
-         StakeCredential
-
-     | CertificateStakeAddressDelegation
-         StakeCredential
-         PoolId
-
-     | CertificateStakePoolRegistration
-         StakePoolParameters
-
-     | CertificateStakePoolRetirement
-         PoolId
-         EpochNo
-
-     | CertificateGenesisKeyDelegation
-         (Hash GenesisKey)
-         (Hash GenesisDelegateKey)
-         (Hash VrfKey)
-
-     | CertificateMIR
-         MIRPot
-         [(StakeCredential, Lovelace)]
-
-  deriving Show
-
-data StakePoolParameters = StakePoolParameters {
-       stakePoolId            :: PoolId,
-       stakePoolVRF           :: Hash VrfKey,
-       stakePoolCost          :: Lovelace,
-       stakePoolMargin        :: Rational,
-       stakePoolRewardAccount :: StakeCredential,
-       stakePoolPledge        :: Lovelace,
-       stakePoolOwners        :: [Hash StakeKey],
-       stakePoolRelays        :: [StakePoolRelay],
-       stakePoolMetadata      :: Maybe StakePoolMetadataReference
-     }
-  deriving (Eq, Show)
-
-data StakePoolRelay = StakePoolRelay
-  deriving (Eq, Show)
-{-TODO
-data StakePoolRelay
-  = -- | One or both of IPv4 & IPv6
-    SingleHostAddr !(StrictMaybe Port) !(StrictMaybe IPv4) !(StrictMaybe IPv6)
-  | -- | An @A@ or @AAAA@ DNS record
-    SingleHostName !(StrictMaybe Port) !DnsName
-  | -- | A @SRV@ DNS record
-    MultiHostName !DnsName
--}
-
-data StakePoolMetadataReference = StakePoolMetadataReference
-  deriving (Eq, Show)
-{-TODO
-data PoolMetaData = PoolMetaData
-  { _poolMDUrl :: !Url,
-    _poolMDHash :: !ByteString
-  }
--}
 
 type ProtocolUpdates = Shelley.ProposedPPUpdates ShelleyCrypto
 
@@ -876,9 +822,6 @@ makeShelleyTransaction TxExtraContent {
         (toShelleyUpdate <$> Shelley.maybeToStrictMaybe txProtocolUpdates)
         (Shelley.hashMetaData . toShelleyMetaData <$>
            Shelley.maybeToStrictMaybe txMetadata))
-
-toShelleyCertificate :: Certificate -> Shelley.DCert ShelleyCrypto
-toShelleyCertificate = error "TODO: toShelleyCertificate"
 
 toShelleyWdrl :: [(StakeAddress, Lovelace)] -> Shelley.Wdrl ShelleyCrypto
 toShelleyWdrl wdrls =
@@ -1213,6 +1156,128 @@ newtype instance Hash Script = ScriptHash (Shelley.ScriptHash ShelleyCrypto)
 
 shelleyScriptWitness :: Script -> TxId -> Witness Shelley
 shelleyScriptWitness = undefined
+
+
+-- ----------------------------------------------------------------------------
+-- Certificates embedded in transactions
+--
+
+data Certificate =
+
+       CertificateStakeAddressRegistration
+         StakeCredential
+
+     | CertificateStakeAddressDeregistration
+         StakeCredential
+
+     | CertificateStakeAddressDelegation
+         StakeCredential
+         PoolId
+
+     | CertificateStakePoolRegistration
+         StakePoolParameters
+
+     | CertificateStakePoolRetirement
+         PoolId
+         EpochNo
+
+     | CertificateGenesisKeyDelegation
+         (Hash GenesisKey)
+         (Hash GenesisDelegateKey)
+         (Hash VrfKey)
+
+     | CertificateMIR
+         MIRPot
+         [(StakeCredential, Lovelace)]
+
+  deriving Show
+
+data StakePoolParameters = StakePoolParameters {
+       stakePoolId            :: PoolId,
+       stakePoolVRF           :: Hash VrfKey,
+       stakePoolCost          :: Lovelace,
+       stakePoolMargin        :: Rational,
+       stakePoolRewardAccount :: StakeCredential,
+       stakePoolPledge        :: Lovelace,
+       stakePoolOwners        :: [Hash StakeKey],
+       stakePoolRelays        :: [StakePoolRelay],
+       stakePoolMetadata      :: Maybe StakePoolMetadataReference
+     }
+  deriving (Eq, Show)
+
+data StakePoolRelay = StakePoolRelay
+  deriving (Eq, Show)
+{-TODO
+data StakePoolRelay
+  = -- | One or both of IPv4 & IPv6
+    SingleHostAddr !(StrictMaybe Port) !(StrictMaybe IPv4) !(StrictMaybe IPv6)
+  | -- | An @A@ or @AAAA@ DNS record
+    SingleHostName !(StrictMaybe Port) !DnsName
+  | -- | A @SRV@ DNS record
+    MultiHostName !DnsName
+-}
+
+data StakePoolMetadataReference = StakePoolMetadataReference
+  deriving (Eq, Show)
+{-TODO
+data PoolMetaData = PoolMetaData
+  { _poolMDUrl :: !Url,
+    _poolMDHash :: !ByteString
+  }
+-}
+
+toShelleyCertificate :: Certificate -> Shelley.DCert ShelleyCrypto
+toShelleyCertificate (CertificateStakeAddressRegistration stakecred) =
+    Shelley.DCertDeleg $
+      Shelley.RegKey
+        (toShelleyStakeCredential stakecred)
+
+toShelleyCertificate (CertificateStakeAddressDeregistration stakecred) =
+    Shelley.DCertDeleg $
+      Shelley.DeRegKey
+        (toShelleyStakeCredential stakecred)
+
+toShelleyCertificate (CertificateStakeAddressDelegation
+                        stakecred (StakePoolKeyHash poolid)) =
+    Shelley.DCertDeleg $
+      Shelley.Delegate $
+        Shelley.Delegation
+          (toShelleyStakeCredential stakecred)
+          poolid
+
+toShelleyCertificate (CertificateStakePoolRegistration poolparams) =
+    Shelley.DCertPool $
+      Shelley.RegPool
+        (toShelleyPoolParams poolparams)
+
+toShelleyCertificate (CertificateStakePoolRetirement
+                        (StakePoolKeyHash poolid) epochno) =
+    Shelley.DCertPool $
+      Shelley.RetirePool
+        poolid
+        epochno
+
+toShelleyCertificate (CertificateGenesisKeyDelegation
+                        (GenesisKeyHash         genesiskh)
+                        (GenesisDelegateKeyHash delegatekh)
+                        (VrfKeyHash             vrfkh)) =
+    Shelley.DCertGenesis $
+      Shelley.GenesisDelegCert
+        genesiskh
+        delegatekh
+        vrfkh
+
+toShelleyCertificate (CertificateMIR mirpot amounts) =
+    Shelley.DCertMir $
+      Shelley.MIRCert
+        mirpot
+        (Map.fromListWith (+)
+           [ (toShelleyStakeCredential sc, toShelleyLovelace v)
+           | (sc, v) <- amounts ])
+
+toShelleyPoolParams :: StakePoolParameters -> Shelley.PoolParams ShelleyCrypto
+toShelleyPoolParams = error "toShelleyPoolParams: TODO"
+
 
 
 -- ----------------------------------------------------------------------------
