@@ -14,7 +14,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import           Formatting (build, sformat)
 
-import           Cardano.Config.TextView (TextViewError(..), TextViewType(..))
+import           Cardano.Api.TextView (TextViewError(..), TextViewType(..))
 
 data ApiError
   = ApiError !Text
@@ -45,7 +45,7 @@ renderApiError ae =
               [ Text.decodeLatin1 (unTextViewType t) | t <- expected ]
           , ", but got type ", Text.decodeLatin1 (unTextViewType actual)
           ]
-
+      TextViewAesonDecodeError de -> sformat build de
       TextViewDecodeError de -> sformat build de
 
 textShow :: Show a => a -> Text

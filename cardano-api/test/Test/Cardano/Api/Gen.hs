@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Test.Cardano.Api.Gen
   ( genAddress
@@ -28,12 +29,16 @@ module Test.Cardano.Api.Gen
   , genVerificationKeyShelleyStaking
   , genVRFKeyPair
   , genSeed
+  -- to remove
+  , genTextView
   ) where
 
+
 import           Cardano.Api
+import           Cardano.Api.TextView -- to remove
+import           Cardano.Crypto.DSIGN.Class
 import           Cardano.Binary (serialize)
 import qualified Cardano.Crypto as Byron
-import           Cardano.Crypto.DSIGN
 import           Cardano.Crypto.VRF.Class (deriveVerKeyVRF, genKeyVRF, seedSizeVRF)
 import           Cardano.Prelude hiding (MetaData)
 
@@ -454,3 +459,14 @@ genLovelace =
 
 genSeed :: Int -> Gen Crypto.Seed
 genSeed n = Crypto.mkSeedFromBytes <$> Gen.bytes (Range.singleton n)
+
+
+-- -------------------------------------------------------------------------------------------------
+-- To remove
+
+genTextView :: Gen TextView
+genTextView =
+  TextView
+    <$> fmap TextViewType (Gen.utf8 (Range.linear 1 20) Gen.alpha)
+    <*> fmap TextViewDescription (Gen.utf8 (Range.linear 1 80) (Gen.filter (/= '\n') Gen.ascii))
+    <*> Gen.bytes (Range.linear 0 500)

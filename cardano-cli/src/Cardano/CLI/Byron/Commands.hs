@@ -17,7 +17,7 @@ import           Cardano.Chain.Update
                     SystemTag(..))
 
 import           Cardano.Api (Network)
-import           Cardano.Config.Protocol (CardanoEra(..))
+import           Cardano.Api.Typed (NetworkId)
 import           Cardano.Config.Types
 
 import           Cardano.CLI.Byron.UpdateProposal
@@ -91,12 +91,12 @@ data ByronCommand =
         VerificationKeyFile
 
   | GetLocalNodeTip
-        Network
+        NetworkId
 
     -----------------------------------
 
   | SubmitTx
-        Network
+        NetworkId
         TxFile
         -- ^ Filepath of transaction to submit.
 
@@ -152,11 +152,11 @@ data NodeCmd = CreateVote
                FilePath
                [ParametersToUpdate]
              | SubmitUpdateProposal
-               Network
+               NetworkId
                FilePath
                -- ^ Update proposal filepath.
              | SubmitVote
-               Network
+               NetworkId
                FilePath
                -- ^ Vote filepath.
               deriving Show

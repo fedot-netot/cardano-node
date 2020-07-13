@@ -4,8 +4,8 @@
 module Cardano.CLI.Helpers
   ( ConversionError(..)
   , HelpersError(..)
-  , convertITNverificationKey
-  , convertITNsigningKey
+  , convertITNVerificationKey
+  , convertITNSigningKey
   , dataPartToBase16
   , decodeBech32Key
   , ensureNewFile
@@ -15,9 +15,6 @@ module Cardano.CLI.Helpers
   , readBech32
   , renderConversionError
   , renderHelpersError
-  , serialiseSigningKey
-  , textToByteString
-  , textToLByteString
   , validateCBOR
   ) where
 
@@ -29,33 +26,29 @@ import qualified Codec.Binary.Bech32 as Bech32
 import           Codec.CBOR.Pretty (prettyHexEnc)
 import           Codec.CBOR.Read (DeserialiseFailure, deserialiseFromBytes)
 import           Codec.CBOR.Term (decodeTerm, encodeTerm)
-import           Codec.CBOR.Write (toLazyByteString)
 import           Control.Exception (IOException)
 import qualified Control.Exception as Exception
 import           Control.Monad.Trans.Except.Extra (handleIOExceptT, left)
 import qualified Data.ByteString.Base16 as Base16
 import qualified Data.ByteString.Char8 as SC
 import qualified Data.ByteString.Lazy as LB
-import qualified Data.ByteString.Lazy.Char8 as LC
 import qualified Data.Text as Text
 import           System.Directory (doesPathExist)
 
-import           Cardano.Api (SigningKey(..), StakingVerificationKey(..), textShow)
+import           Cardano.Api (textShow)
+import           Cardano.Api.Typed (SigningKey(..), StakeKey, VerificationKey(..))
 import           Cardano.Binary (Decoder, fromCBOR)
 import qualified Cardano.Chain.Delegation as Delegation
 import qualified Cardano.Chain.Update as Update
 import           Cardano.Chain.Block (fromCBORABlockOrBoundary)
 import qualified Cardano.Chain.UTxO as UTxO
-import           Cardano.Config.Protocol (CardanoEra(..))
 import           Cardano.Config.Types
-import qualified Cardano.Crypto as Crypto
 import qualified Cardano.Crypto.DSIGN as DSIGN
 
 import qualified Shelley.Spec.Ledger.Keys as Shelley
 
 data HelpersError
-  = CardanoEraNotSupportedFail !CardanoEra
-  | CBORPrettyPrintError !DeserialiseFailure
+  = CBORPrettyPrintError !DeserialiseFailure
   | CBORDecodingError !DeserialiseFailure
   | IOError' !FilePath !IOException
   | OutputMustNotAlreadyExist FilePath
@@ -65,7 +58,6 @@ data HelpersError
 renderHelpersError :: HelpersError -> Text
 renderHelpersError err =
   case err of
-    CardanoEraNotSupportedFail era -> "Cardano era not supported: " <> (Text.pack $ show era)
     OutputMustNotAlreadyExist fp -> "Output file/directory must not already exist: " <> Text.pack fp
     ReadCBORFileFailure fp err' -> "CBOR read failure at: " <> Text.pack fp <> (Text.pack $ show err')
     CBORPrettyPrintError err' -> "Error with CBOR decoding: " <> (Text.pack $ show err')
@@ -89,20 +81,6 @@ ensureNewFile writer outFile blob = do
 
 ensureNewFileLBS :: FilePath -> LB.ByteString -> ExceptT HelpersError IO ()
 ensureNewFileLBS = ensureNewFile LB.writeFile
-
-serialiseSigningKey
-  :: CardanoEra
-  -> Crypto.SigningKey
-  -> Either HelpersError LB.ByteString
-serialiseSigningKey ByronEraLegacy (Crypto.SigningKey k) = pure $ toLazyByteString (Crypto.toCBORXPrv k)
-serialiseSigningKey ByronEra (Crypto.SigningKey k) = pure $ toLazyByteString (Crypto.toCBORXPrv k)
-serialiseSigningKey ShelleyEra _ = Left $ CardanoEraNotSupportedFail ShelleyEra
-
-textToLByteString :: Text -> LB.ByteString
-textToLByteString = LC.pack . Text.unpack
-
-textToByteString :: Text -> SC.ByteString
-textToByteString = SC.pack . Text.unpack
 
 pPrintCBOR :: LByteString -> ExceptT HelpersError IO ()
 pPrintCBOR bs = do
@@ -176,19 +154,19 @@ renderConversionError err =
       "Error deserialising verification key: " <> textShow (SC.unpack vKey)
 
 -- | Convert public ed25519 key to a Shelley stake verification key
-convertITNverificationKey :: Text -> Either ConversionError StakingVerificationKey
-convertITNverificationKey pubKey = do
+convertITNVerificationKey :: Text -> Either ConversionError (VerificationKey StakeKey)
+convertITNVerificationKey pubKey = do
   (_, _, keyBS) <- decodeBech32Key pubKey
   case DSIGN.rawDeserialiseVerKeyDSIGN keyBS of
-    Just verKey -> Right . StakingVerificationKeyShelley $ Shelley.VKey verKey
+    Just verKey -> Right . StakeVerificationKey $ Shelley.VKey verKey
     Nothing -> Left $ VerificationKeyDeserializationError keyBS
 
 -- | Convert private ed22519 key to a Shelley signing key.
-convertITNsigningKey :: Text -> Either ConversionError SigningKey
-convertITNsigningKey privKey = do
+convertITNSigningKey :: Text -> Either ConversionError (SigningKey StakeKey)
+convertITNSigningKey privKey = do
   (_, _, keyBS) <- decodeBech32Key privKey
   case DSIGN.rawDeserialiseSignKeyDSIGN keyBS of
-    Just signKey -> Right $ SigningKeyShelley signKey
+    Just signKey -> Right $ StakeSigningKey signKey
     Nothing -> Left $ SigningKeyDeserializationError keyBS
 
 -- | Convert ITN Bech32 public or private keys to 'ByteString's

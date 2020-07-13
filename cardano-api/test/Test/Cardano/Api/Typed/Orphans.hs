@@ -15,47 +15,6 @@ import           Cardano.Crypto.KES
 
 import           Test.Cardano.Api.Orphans ()
 
--- Address instances
-
-deriving instance Eq (Address Byron)
-deriving instance Show (Address Byron)
-
-deriving instance Eq (Address Shelley)
-deriving instance Show (Address Shelley)
-
-deriving instance Eq StakeAddress
-deriving instance Show StakeAddress
-
--- Hash instances
-
-deriving instance Eq (Hash ByronKey)
-deriving instance Show (Hash ByronKey)
-
-deriving instance Eq (Hash PaymentKey)
-deriving instance Show (Hash PaymentKey)
-
-deriving instance Eq (Hash StakeKey)
-deriving instance Show (Hash StakeKey)
-
-deriving instance Eq (Hash StakePoolKey)
-deriving instance Show (Hash StakePoolKey)
-
-deriving instance Eq (Hash GenesisKey)
-deriving instance Show (Hash GenesisKey)
-
-deriving instance Eq (Hash GenesisUTxOKey)
-deriving instance Show (Hash GenesisUTxOKey)
-
-deriving instance Eq (Hash GenesisDelegateKey)
-deriving instance Show (Hash GenesisDelegateKey)
-
-deriving instance Eq (Hash KesKey)
-deriving instance Show (Hash KesKey)
-
-deriving instance Eq (Hash VrfKey)
-deriving instance Show (Hash VrfKey)
-
-
 -- Signing Key instances
 
 deriving instance Eq (SigningKey ByronKey)

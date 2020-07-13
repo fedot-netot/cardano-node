@@ -2,8 +2,6 @@
   <big><strong>Cardano Node</strong></big>
 </p>
 
-![alt text](https://github.com/input-output-hk/cardano-node/blob/media/Cardano-ADA.png?raw=true)
-
 <p align="center">
   <a href="https://github.com/input-output-hk/cardano-node/releases"><img src="https://img.shields.io/github/release-pre/input-output-hk/cardano-node.svg?style=for-the-badge" /></a>
   <a href="https://buildkite.com/input-output-hk/cardano-node"><img src="https://img.shields.io/buildkite/a978cbb4def7018be3d0a004127da356f4db32f1c318c1a48a/master?label=BUILD&style=for-the-badge"/></a>
@@ -12,14 +10,10 @@
 # cardano-node
 
 Integration of the [ledger](https://github.com/input-output-hk/cardano-ledger),
-[consensus](https://github.com/input-output-hk/ouroboros-network/tree/master/ouroboros-consensus),
+[consensus](https://github.com/input-output-hk/ouroboros-network/tree/master/ouroboros-consensus) and
 [networking](https://github.com/input-output-hk/ouroboros-network/tree/master/ouroboros-network)
-and [node shell](https://github.com/input-output-hk/cardano-shell)
 repositories.
-[Logging](https://github.com/input-output-hk/iohk-monitoring-framework) is
-provided as
-a [feature](https://github.com/input-output-hk/cardano-shell/blob/master/app/Cardano/Shell/Features/Logging.hs)
-by the node shell to the other packages.
+We use the [iohk-monitoring-framework](https://github.com/input-output-hk/iohk-monitoring-framework) for logging.
 
 - The cardano-node is the top level for the node and
   aggregates the other components from other packages: consensus, ledger and
@@ -37,11 +31,40 @@ The latest supported networks can be found at https://hydra.iohk.io/job/Cardano/
 
 ## Cabal
 
-Use [Cabal - Version 3.0](https://www.haskell.org/cabal/) to build this project:
+#### Dependencies:
+
+You will need to install one or both of these libraries on your system:
+
+* libsodium
+* libsodium-dev
+
+For example, on Ubuntu:
 
 ```
-$ cd cardano-node
-$ cabal build
+   sudo apt install libsodium-dev
+```
+
+For ease of use, also create a `cabal.project.local` at the toplevel with:
+```
+package cardano-crypto-praos
+  flags: -external-libsodium-vrf
+```
+
+There are two choices for building `cardano-crypto-praos`, selected via a cabal flag `external-libsodium-vrf`:
+1. `+external-libsodium-vrf` Which requires a special fork of `libsodium` with the VRF code to be installed on the system
+2. `-external-libsodium-vrf` Which uses a bundled version of the VRF C code and uses the vanilla system `libsodium`
+The second option is currently only suitable for development -- but not deployment -- because it uses the libsodium C code in an unsupported configuration
+
+Use [Cabal - Version 3.0](https://www.haskell.org/cabal/) to build this project, including the CLI interface to the node:
+
+```
+$ cabal build cardano-node cardano-cli
+```
+
+Install the `cardano-node` and `cardano-cli` commands using `cabal`.  Not that you may need to specify the installation directory using `--installdir`.
+
+```
+$ cabal install cardano-node cardano-cli
 ```
 
 ## Windows Executable
@@ -51,7 +74,7 @@ You can download [here](https://hydra.iohk.io/job/Cardano/cardano-node/cardano-n
 
 ### Instructions
 
-The download includes cardano-node.exe and a .dll. To run the node with cardano-node run you need to reference a few files and directories as arguments. These can be copied from the cardano-node repo into the executables directory. The command to run the node on mainnet looks like this:
+The download includes `cardano-node.exe` and a `.dll` file. To run the node with `cardano-node run`, you need to reference a few files and directories as arguments. These can be copied from the `cardano-node` repo into the executables directory. The command to run the node on mainnet looks like this:
 
 ```
 cardano-node.exe run --topology ./mainnet-topology.json --database-path ./state --port 3001 --config ./configuration-mainnet.yaml --socket-path \\.\pipe\cardano-node
@@ -134,6 +157,51 @@ environment-specific adjustment has been made, so we only mention `cardano-cli`.
 
 The subcommands are subdivided in groups, and their full list can be seen in the
 output of `cardano-cli --help`.
+
+```
+$ cardano-cli --help
+cardano-cli - utility to support a variety of key operations (genesis generation, migration, pretty-printing..) for different system generations.
+
+Usage: cardano-cli (Byron specific commands | Shelley specific commands |
+                     Miscellaneous commands)
+
+Available options:
+  --version                Show the cardano-cli version
+  -h,--help                Show this help text
+
+Byron specific commands
+  byron                    Byron node operation commands
+  genesis                  Create genesis.
+  print-genesis-hash       Compute hash of a genesis file.
+  keygen                   Generate a signing key.
+  to-verification          Extract a verification key in its base64 form.
+  signing-key-public       Pretty-print a signing key's verification key (not a
+                           secret).
+  signing-key-address      Print address of a signing key.
+  migrate-delegate-key-from
+                           Migrate a delegate key from an older version.
+  issue-delegation-certificate
+                           Create a delegation certificate allowing the
+                           delegator to sign blocks on behalf of the issuer
+  check-delegation         Verify that a given certificate constitutes a valid
+                           delegation relationship between keys.
+  submit-tx                Submit a raw, signed transaction, in its on-wire
+                           representation.
+  issue-genesis-utxo-expenditure
+                           Write a file with a signed transaction, spending
+                           genesis UTxO.
+  issue-utxo-expenditure   Write a file with a signed transaction, spending
+                           normal UTxO.
+  get-tip                  Get the tip of your local node's blockchain
+  validate-cbor            Validate a CBOR blockchain object.
+  pretty-print-cbor        Pretty print a CBOR file.
+
+Shelley specific commands
+  shelley                  Shelley specific commands
+
+Miscellaneous commands
+  version                  Show the cardano-cli version
+```
 
 All subcommands have help available:
 

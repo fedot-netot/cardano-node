@@ -4,10 +4,12 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 
+{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -71,6 +73,7 @@ module Cardano.Api.Typed (
     PaymentCredential(..),
     StakeAddressReference(..),
     PaymentKey,
+    PaymentExtendedKey,
 
     -- * Stake addresses
     -- | Constructing and inspecting stake addresses
@@ -82,16 +85,20 @@ module Cardano.Api.Typed (
     -- * Building transactions
     -- | Constructing and inspecting transactions
     TxBody(..),
-    TxId,
+    TxId(..),
     getTxId,
     TxIn(..),
     TxOut(..),
-    TxIx,
-    Lovelace,
+    TxIx(..),
+    TTL,
+    TxFee,
+    Lovelace(..),
     makeByronTransaction,
     makeShelleyTransaction,
     SlotNo,
-    TxOptional(..),
+    TxExtraContent(..),
+    txExtraContentEmpty,
+    Certificate,
 
     -- * Signing transactions
     -- | Creating transaction witnesses one by one, or all in one go.
@@ -106,20 +113,43 @@ module Cardano.Api.Typed (
     -- ** Incremental signing and separate witnesses
     makeSignedTransaction,
     Witness(..),
-    byronKeyWitness,
-    shelleyKeyWitness,
-    shelleyScriptWitness,
+    makeByronKeyWitness,
+    ShelleyWitnessSigningKey(..),
+    makeShelleyKeyWitness,
+    makeShelleyBootstrapWitness,
+    makeShelleyScriptWitness,
 
     -- * Fee calculation
+    transactionFee,
+    estimateTransactionFee,
+
+    -- * Transaction metadata
+    -- | Embedding additional structured data within transactions.
+    TxMetadata,
+    TxMetadataValue(..),
+    makeTransactionMetadata,
 
     -- * Registering stake address and delegating
     -- | Certificates that are embedded in transactions for registering and
     -- unregistering stake address, and for setting the stake pool delegation
     -- choice for a stake address.
+    makeStakeAddressRegistrationCertificate,
+    makeStakeAddressDeregistrationCertificate,
+    makeStakeAddressDelegationCertificate,
 
     -- * Registering stake pools
     -- | Certificates that are embedded in transactions for registering and
     -- retiring stake pools. This incldes updating the stake pool parameters.
+    makeStakePoolRegistrationCertificate,
+    makeStakePoolRetirementCertificate,
+    StakePoolParameters(..),
+    StakePoolRelay(..),
+    StakePoolMetadataReference(..),
+
+    -- ** Stake pool off-chain metadata
+    StakePoolMetadata(..),
+    validateAndHashStakePoolMetadata,
+    StakePoolMetadataValidationError(..),
 
     -- * Scripts
     -- | Both 'PaymentCredential's and 'StakeCredential's can use scripts.
@@ -147,6 +177,18 @@ module Cardano.Api.Typed (
     serialiseToJSON,
     deserialiseFromJSON,
 
+    -- ** Bech32
+    SerialiseAsBech32,
+    serialiseToBech32,
+    deserialiseFromBech32,
+    Bech32DecodeError(..),
+
+    -- ** Addresses
+    -- | Address serialisation is (sadly) special
+    SerialiseAddress,
+    serialiseAddress,
+    deserialiseAddress,
+
     -- ** Raw binary
     -- | Some types have a natural raw binary format.
     SerialiseAsRawBytes,
@@ -158,7 +200,7 @@ module Cardano.Api.Typed (
     -- ** Text envelope
     -- | Support for a envelope file format with text headers and a hex-encoded
     -- binary payload.
-    HasTextEnvelope,
+    HasTextEnvelope(..),
     TextEnvelope,
     TextEnvelopeType,
     TextEnvelopeDescr,
@@ -167,6 +209,8 @@ module Cardano.Api.Typed (
     deserialiseFromTextEnvelope,
     readFileTextEnvelope,
     writeFileTextEnvelope,
+    readTextEnvelopeFromFile,
+    readTextEnvelopeOfTypeFromFile,
     -- *** Reading one of several key types
     FromSomeType(..),
     deserialiseFromTextEnvelopeAnyOf,
@@ -181,8 +225,29 @@ module Cardano.Api.Typed (
     -- | Operations that involve talking to a local Cardano node.
 
     -- ** Queries
-    -- ** Protocol parameters
     -- ** Submitting transactions
+
+    -- ** Low level protocol interaction with a Cardano node
+    connectToLocalNode,
+    LocalNodeConnectInfo(..),
+    ByronMode,
+    ShelleyMode,
+    CardanoMode,
+    NodeConsensusMode(..),
+    LocalNodeClientProtocols(..),
+    nullLocalNodeClientProtocols,
+--  connectToRemoteNode,
+
+    -- *** Chain sync protocol
+    ChainSyncClient(..),
+
+    -- *** Local tx submission
+    LocalTxSubmissionClient(..),
+    submitTxToNodeLocal,
+
+    -- *** Local state query
+    LocalStateQueryClient(..),
+    queryNodeLocalState,
 
     -- * Node operation
     -- | Support for the steps needed to operate a node, including the
@@ -191,6 +256,7 @@ module Cardano.Api.Typed (
 
     -- ** Stake pool operator's keys
     StakePoolKey,
+    PoolId,
 
     -- ** KES keys
     KesKey,
@@ -210,50 +276,117 @@ module Cardano.Api.Typed (
     GenesisKey,
     GenesisDelegateKey,
     GenesisUTxOKey,
+    genesisUTxOPseudoTxIn,
 
     -- * Special transactions
     -- | There are various additional things that can be embedded in a
     -- transaction for special operations.
+    makeMIRCertificate,
+    makeGenesisKeyDelegationCertificate,
 
+    -- ** Protocol parameter updates
+    UpdateProposal,
+    ProtocolParametersUpdate(..),
+    EpochNo,
+    NetworkMagic(..),
+    makeShelleyUpdateProposal,
   ) where
 
 
-import Prelude
+import           Prelude
 
+import           Data.Aeson.Encode.Pretty (encodePretty')
 import           Data.Proxy (Proxy(..))
 import           Data.Kind (Constraint)
+import           Data.Void (Void)
+import           Data.Word
 import           Data.Maybe
 import           Data.Bifunctor (first)
 import           Data.List as List
+import qualified Data.List.NonEmpty as NonEmpty
 --import           Data.Either
 import           Data.String (IsString(fromString))
-import qualified Data.Text as Text (unpack)
+import           Data.Text (Text)
+import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
 import           Numeric.Natural
+
+import           Data.IP (IPv4, IPv6)
+import           Network.Socket (PortNumber)
+import qualified Network.URI as URI
+
 
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import qualified Data.ByteString.Base16 as Base16
+import qualified Data.ByteString.Base58 as Base58
 
---import Control.Monad
+import qualified Data.Set as Set
+import qualified Data.Map.Strict as Map
+import           Data.Map.Strict (Map)
+import qualified Data.Sequence.Strict as Seq
+import qualified Data.Vector as Vector
+
+import qualified Codec.Binary.Bech32 as Bech32
+
+import           Control.Applicative
+import           Control.Monad
 --import Control.Monad.IO.Class
---import           Control.Monad.Trans.Except
+import           Control.Monad.Trans.Except (ExceptT(..))
 import           Control.Monad.Trans.Except.Extra
 import           Control.Exception (Exception(..), IOException, throwIO)
+import           Control.Tracer (nullTracer)
+import           Control.Concurrent.STM
 
 import qualified Data.Aeson as Aeson
-import           Data.Aeson (ToJSON(..), FromJSON(..))
+import qualified Data.Aeson.Types as Aeson
+import           Data.Aeson (ToJSON(..), FromJSON(..), (.:))
 
 
 --
 -- Common types, consensus, network
 --
 import qualified Cardano.Binary as CBOR
-import           Cardano.Binary (ToCBOR(toCBOR), FromCBOR(fromCBOR))
+import           Cardano.Binary
+                   (ToCBOR(toCBOR), FromCBOR(fromCBOR),
+                    Annotated(..), reAnnotate, recoverBytes)
 import qualified Cardano.Prelude as CBOR (cborError)
-import           Shelley.Spec.Ledger.Serialization (CBORGroup(..))
-import           Cardano.Slotting.Slot (SlotNo)
+import qualified Shelley.Spec.Ledger.Serialization as CBOR
+                   (CBORGroup(..), encodeNullMaybe, decodeNullMaybe)
+
+import           Cardano.Slotting.Slot (SlotNo, EpochNo)
+
+-- TODO: it'd be nice if the network imports needed were a bit more coherent
+import           Ouroboros.Network.Block (Point, Tip)
 import           Ouroboros.Network.Magic (NetworkMagic(..))
+import           Ouroboros.Network.NodeToClient
+                   (NodeToClientProtocols(..), NodeToClientVersionData(..),
+                    NetworkConnectTracers(..), withIOManager, connectTo,
+                    localSnocket, foldMapVersions,
+                    versionedNodeToClientProtocols, chainSyncPeerNull,
+                    localTxSubmissionPeerNull, localStateQueryPeerNull)
+import           Ouroboros.Network.Mux
+                   (MuxMode(InitiatorMode), MuxPeer(..),
+                    RunMiniProtocol(InitiatorProtocolOnly))
+
+-- TODO: it'd be nice if the consensus imports needed were a bit more coherent
+import           Ouroboros.Consensus.Cardano
+                   (SecurityParam, ProtocolClient, protocolClientInfo)
+import           Ouroboros.Consensus.Block (BlockProtocol)
+import           Ouroboros.Consensus.Ledger.Abstract (Query)
+import           Ouroboros.Consensus.Ledger.SupportsMempool (ApplyTxErr, GenTx)
+import           Ouroboros.Consensus.Network.NodeToClient
+                   (Codecs'(..), clientCodecs)
+import           Ouroboros.Consensus.Node.ProtocolInfo (ProtocolClientInfo(..))
+import           Ouroboros.Consensus.Node.NetworkProtocolVersion
+                  (BlockNodeToClientVersion, TranslateNetworkProtocolVersion,
+                   nodeToClientProtocolVersion, supportedNodeToClientVersions)
+import           Ouroboros.Consensus.Node.Run (SerialiseNodeToClientConstraints)
+
+import           Ouroboros.Consensus.Byron.Ledger.Block (ByronBlock)
+import           Ouroboros.Consensus.Shelley.Ledger (ShelleyBlock)
+import           Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 
 --
 -- Crypto API used by consensus and Shelley (and should be used by Byron)
@@ -263,31 +396,47 @@ import qualified Cardano.Crypto.Hash.Class  as Crypto
 import qualified Cardano.Crypto.DSIGN.Class as Crypto
 import qualified Cardano.Crypto.KES.Class   as Crypto
 import qualified Cardano.Crypto.VRF.Class   as Crypto
+import qualified Cardano.Crypto.Wallet      as Crypto.HD
 
 --
 -- Byron imports
 --
 import qualified Cardano.Crypto.Hashing as Byron
 import qualified Cardano.Crypto.Signing as Byron
+import qualified Cardano.Crypto.ProtocolMagic as Byron
+
 import qualified Cardano.Chain.Common as Byron
+import qualified Cardano.Chain.Genesis as Byron
 import qualified Cardano.Chain.UTxO   as Byron
+import qualified Cardano.Chain.Slotting as Byron
+
 
 --
 -- Shelley imports
 --
 import qualified Ouroboros.Consensus.Shelley.Protocol.Crypto as Shelley
+
 import qualified Shelley.Spec.Ledger.Address                 as Shelley
-import qualified Shelley.Spec.Ledger.Credential              as Shelley
+import qualified Shelley.Spec.Ledger.Address.Bootstrap       as Shelley
 import qualified Shelley.Spec.Ledger.BaseTypes               as Shelley
---import qualified Shelley.Spec.Ledger.Coin                    as Shelley
---import qualified Shelley.Spec.Ledger.Delegation.Certificates as Shelley
+import           Shelley.Spec.Ledger.BaseTypes
+                   (maybeToStrictMaybe, strictMaybeToMaybe)
+import qualified Shelley.Spec.Ledger.Coin                    as Shelley
+import qualified Shelley.Spec.Ledger.Credential              as Shelley
+import qualified Shelley.Spec.Ledger.Genesis                 as Shelley
+import qualified Shelley.Spec.Ledger.LedgerState             as Shelley
 import qualified Shelley.Spec.Ledger.Keys                    as Shelley
-import qualified Shelley.Spec.Ledger.PParams                 as Shelley
+import qualified Shelley.Spec.Ledger.MetaData                as Shelley
 import qualified Shelley.Spec.Ledger.OCert                   as Shelley
+import qualified Shelley.Spec.Ledger.PParams                 as Shelley
 import qualified Shelley.Spec.Ledger.Scripts                 as Shelley
 import qualified Shelley.Spec.Ledger.TxData                  as Shelley
 import qualified Shelley.Spec.Ledger.Tx                      as Shelley
 import qualified Shelley.Spec.Ledger.UTxO                    as Shelley
+
+-- Types we will re-export as-is
+import           Shelley.Spec.Ledger.TxData
+                   (MIRPot(..))
 
 -- TODO: replace the above with
 --import qualified Cardano.Api.Byron   as Byron
@@ -296,7 +445,17 @@ import qualified Shelley.Spec.Ledger.UTxO                    as Shelley
 --
 -- Other config and common types
 --
-import qualified Cardano.Config.TextView as TextView
+import qualified Cardano.Api.TextView as TextView
+import           Cardano.Api.Protocol.Byron   (mkNodeClientProtocolByron)
+import           Cardano.Api.Protocol.Shelley (mkNodeClientProtocolShelley)
+import           Cardano.Api.Protocol.Cardano (mkNodeClientProtocolCardano)
+
+import           Ouroboros.Network.Protocol.ChainSync.Client as ChainSync
+import           Ouroboros.Network.Protocol.LocalTxSubmission.Client as TxSubmission
+import           Ouroboros.Network.Protocol.LocalStateQuery.Client as StateQuery
+import           Ouroboros.Network.Protocol.LocalStateQuery.Type (AcquireFailure)
+
+
 
 
 -- ----------------------------------------------------------------------------
@@ -346,7 +505,6 @@ class HasTypeProxy t where
 --
 class (Eq (VerificationKey keyrole),
        Show (VerificationKey keyrole),
-       Show (SigningKey keyrole),
        SerialiseAsRawBytes (Hash keyrole),
        HasTextEnvelope (VerificationKey keyrole),
        HasTextEnvelope (SigningKey keyrole))
@@ -383,10 +541,12 @@ generateSigningKey keytype = do
 -- | Some key roles share the same representation and it is sometimes
 -- legitimate to change the role of a key.
 --
-class CastKeyRole keyroleA keyroleB where
+class CastVerificationKeyRole keyroleA keyroleB where
 
     -- | Change the role of a 'VerificationKey', if the representation permits.
     castVerificationKey :: VerificationKey keyroleA -> VerificationKey keyroleB
+
+class CastSigningKeyRole keyroleA keyroleB where
 
     -- | Change the role of a 'SigningKey', if the representation permits.
     castSigningKey :: SigningKey keyroleA -> SigningKey keyroleB
@@ -419,29 +579,42 @@ data Address era where
        -> Shelley.StakeReference    ShelleyCrypto
        -> Address Shelley
 
+deriving instance Eq (Address Byron)
+deriving instance Ord (Address Byron)
+deriving instance Show (Address Byron)
+
+deriving instance Eq (Address Shelley)
+deriving instance Ord (Address Shelley)
+deriving instance Show (Address Shelley)
+
 data StakeAddress where
 
      StakeAddress
        :: Shelley.Network
        -> Shelley.StakeCredential ShelleyCrypto
        -> StakeAddress
+  deriving (Eq, Ord, Show)
 
 data NetworkId
        = Mainnet
        | Testnet !NetworkMagic
+  deriving (Eq, Show)
 
 data PaymentCredential
        = PaymentCredentialByKey    (Hash PaymentKey)
        | PaymentCredentialByScript (Hash Script)
+  deriving (Eq, Show)
 
 data StakeCredential
        = StakeCredentialByKey    (Hash StakeKey)
        | StakeCredentialByScript (Hash Script)
+  deriving (Eq, Show)
 
 data StakeAddressReference
        = StakeAddressByValue   StakeCredential
        | StakeAddressByPointer StakeAddressPointer
        | NoStakeAddress
+  deriving (Eq, Show)
 
 type StakeAddressPointer = Shelley.Ptr
 
@@ -492,27 +665,80 @@ instance SerialiseAsRawBytes (Address Shelley) where
 
 instance SerialiseAsRawBytes StakeAddress where
     serialiseToRawBytes (StakeAddress nw sc) =
-        serialiseRewardAcnt (Shelley.RewardAcnt nw sc)
-      where
-        serialiseRewardAcnt =
-          error "TODO: Use Shelley.serialiseRewardAcnt when it is available"
+        Shelley.serialiseRewardAcnt (Shelley.RewardAcnt nw sc)
 
     deserialiseFromRawBytes AsStakeAddress bs =
-        case deserialiseRewardAcnt bs of
+        case Shelley.deserialiseRewardAcnt bs of
           Nothing -> Nothing
           Just (Shelley.RewardAcnt nw sc) -> Just (StakeAddress nw sc)
+
+
+instance SerialiseAsBech32 (Address Shelley) where
+    bech32PrefixFor (ShelleyAddress Shelley.Mainnet _ _) = "addr"
+    bech32PrefixFor (ShelleyAddress Shelley.Testnet _ _) = "addr_test"
+    bech32PrefixFor (ByronAddress _)                     = "addr_bootstrap"
+
+    bech32PrefixesPermitted AsShelleyAddress = ["addr", "addr_test",
+                                                "addr_bootstrap"]
+
+
+instance SerialiseAsBech32 StakeAddress where
+    bech32PrefixFor (StakeAddress Shelley.Mainnet _) = "stake"
+    bech32PrefixFor (StakeAddress Shelley.Testnet _) = "stake_test"
+
+    bech32PrefixesPermitted AsStakeAddress = ["stake", "stake_test"]
+
+
+instance SerialiseAddress (Address Byron) where
+    serialiseAddress addr@ByronAddress{} =
+         Text.decodeLatin1
+       . Base58.encodeBase58 Base58.bitcoinAlphabet
+       . serialiseToRawBytes
+       $ addr
+
+    deserialiseAddress AsByronAddress txt = do
+      bs <- Base58.decodeBase58 Base58.bitcoinAlphabet (Text.encodeUtf8 txt)
+      deserialiseFromRawBytes AsByronAddress bs
+
+instance SerialiseAddress (Address Shelley) where
+    serialiseAddress (ByronAddress addr) =
+      serialiseAddress (ByronAddress addr :: Address Byron)
+
+    serialiseAddress addr@ShelleyAddress{} =
+      serialiseToBech32 addr
+
+    deserialiseAddress AsShelleyAddress t =
+          deserialiseAsShelleyAddress
+      <|> deserialiseAsByronAddress
       where
-        deserialiseRewardAcnt =
-          error "TODO: Use Shelley.deserialiseRewardAcnt when it is available"
+        deserialiseAsShelleyAddress =
+          either (const Nothing) Just $
+          deserialiseFromBech32 AsShelleyAddress t
+
+        deserialiseAsByronAddress =
+          castByronToShelleyAddress <$>
+          deserialiseAddress AsByronAddress t
+
+        castByronToShelleyAddress :: Address Byron -> Address Shelley
+        castByronToShelleyAddress (ByronAddress addr) = ByronAddress addr
 
 
-makeByronAddress :: VerificationKey ByronKey
-                 -> NetworkId
+instance SerialiseAddress StakeAddress where
+    serialiseAddress addr@StakeAddress{} =
+      serialiseToBech32 addr
+
+    deserialiseAddress AsStakeAddress t =
+      either (const Nothing) Just $
+      deserialiseFromBech32 AsStakeAddress t
+
+
+makeByronAddress :: NetworkId
+                 -> VerificationKey ByronKey
                  -> Address era
-makeByronAddress (ByronVerificationKey vk) nid =
+makeByronAddress nw (ByronVerificationKey vk) =
     ByronAddress $
       Byron.makeVerKeyAddress
-        (toByronNetworkMagic nid)
+        (toByronNetworkMagic nw)
         vk
 
 
@@ -536,6 +762,10 @@ makeStakeAddress nw sc =
       (toShelleyStakeCredential sc)
 
 
+toByronProtocolMagicId :: NetworkId -> Byron.ProtocolMagicId
+toByronProtocolMagicId Mainnet = Byron.mainnetProtocolMagicId
+toByronProtocolMagicId (Testnet (NetworkMagic pm)) = Byron.ProtocolMagicId pm
+
 toByronNetworkMagic :: NetworkId -> Byron.NetworkMagic
 toByronNetworkMagic Mainnet                     = Byron.NetworkMainOrStage
 toByronNetworkMagic (Testnet (NetworkMagic nm)) = Byron.NetworkTestnet nm
@@ -544,6 +774,21 @@ toShelleyNetwork :: NetworkId -> Shelley.Network
 toShelleyNetwork  Mainnet    = Shelley.Mainnet
 toShelleyNetwork (Testnet _) = Shelley.Testnet
 
+toNetworkMagic :: NetworkId -> NetworkMagic
+toNetworkMagic  Mainnet     = NetworkMagic 764824073
+toNetworkMagic (Testnet nm) = nm
+
+toShelleyAddr :: Address era -> Shelley.Addr ShelleyCrypto
+toShelleyAddr (ByronAddress addr)        = Shelley.AddrBootstrap
+                                             (Shelley.BootstrapAddress addr)
+toShelleyAddr (ShelleyAddress nw pc scr) = Shelley.Addr nw pc scr
+
+toShelleyStakeAddr :: StakeAddress -> Shelley.RewardAcnt ShelleyCrypto
+toShelleyStakeAddr (StakeAddress nw sc) =
+    Shelley.RewardAcnt {
+      Shelley.getRwdNetwork = nw,
+      Shelley.getRwdCred    = sc
+    }
 
 toShelleyPaymentCredential :: PaymentCredential
                            -> Shelley.PaymentCredential ShelleyCrypto
@@ -574,6 +819,7 @@ toShelleyStakeReference  NoStakeAddress =
 --
 
 newtype TxId = TxId (Shelley.Hash ShelleyCrypto ())
+  deriving (Eq, Ord, Show)
                -- We use the Shelley representation and convert the Byron one
 
 instance HasTypeProxy TxId where
@@ -584,17 +830,24 @@ instance SerialiseAsRawBytes TxId where
     serialiseToRawBytes (TxId h) = Crypto.getHash h
     deserialiseFromRawBytes AsTxId bs = TxId <$> Crypto.hashFromBytes bs
 
+toByronTxId :: TxId -> Byron.TxId
+toByronTxId (TxId (Crypto.UnsafeHash h)) =
+    Byron.unsafeHashFromBytes h
+
+toShelleyTxId :: TxId -> Shelley.TxId ShelleyCrypto
+toShelleyTxId (TxId h) =
+    Shelley.TxId (Crypto.castHash h)
+
 -- | Calculate the transaction identifier for a 'TxBody'.
 --
 getTxId :: TxBody era -> TxId
 getTxId (ByronTxBody tx) =
     TxId
   . Crypto.UnsafeHash
-  . Byron.hashToBytes
-  . Byron.serializeCborHash
+  . recoverBytes
   $ tx
 
-getTxId (ShelleyTxBody tx) =
+getTxId (ShelleyTxBody tx _) =
     TxId
   . Crypto.castHash
   . (\(Shelley.TxId txhash) -> txhash)
@@ -607,17 +860,50 @@ getTxId (ShelleyTxBody tx) =
 --
 
 data TxIn = TxIn TxId TxIx
---TODO  deriving (Show)
+
+deriving instance Eq TxIn
+deriving instance Show TxIn
 
 newtype TxIx = TxIx Word
   deriving stock (Eq, Ord, Show)
   deriving newtype (Enum)
 
 data TxOut era = TxOut (Address era) Lovelace
---TODO  deriving (Show)
+
+deriving instance Eq (TxOut Byron)
+deriving instance Eq (TxOut Shelley)
+deriving instance Show (TxOut Byron)
+deriving instance Show (TxOut Shelley)
 
 newtype Lovelace = Lovelace Integer
   deriving (Eq, Ord, Enum, Show)
+
+
+toByronTxIn  :: TxIn -> Byron.TxIn
+toByronTxIn (TxIn txid (TxIx txix)) =
+    Byron.TxInUtxo (toByronTxId txid) (fromIntegral txix)
+
+toByronTxOut :: TxOut Byron -> Maybe Byron.TxOut
+toByronTxOut (TxOut (ByronAddress addr) value) =
+    Byron.TxOut addr <$> toByronLovelace value
+
+toByronLovelace :: Lovelace -> Maybe Byron.Lovelace
+toByronLovelace (Lovelace x) =
+    case Byron.integerToLovelace x of
+      Left  _  -> Nothing
+      Right x' -> Just x'
+
+toShelleyTxIn  :: TxIn -> Shelley.TxIn ShelleyCrypto
+toShelleyTxIn (TxIn txid (TxIx txix)) =
+    Shelley.TxIn (toShelleyTxId txid) (fromIntegral txix)
+
+toShelleyTxOut :: TxOut era -> Shelley.TxOut ShelleyCrypto
+toShelleyTxOut (TxOut addr value) =
+    Shelley.TxOut (toShelleyAddr addr) (toShelleyLovelace value)
+
+toShelleyLovelace :: Lovelace -> Shelley.Coin
+toShelleyLovelace (Lovelace l) = Shelley.Coin l
+--TODO: validate bounds
 
 
 -- ----------------------------------------------------------------------------
@@ -627,13 +913,19 @@ newtype Lovelace = Lovelace Integer
 data TxBody era where
 
      ByronTxBody
-       :: Byron.Tx
+       :: Annotated Byron.Tx ByteString
        -> TxBody Byron
 
      ShelleyTxBody
        :: Shelley.TxBody ShelleyCrypto
+       -> Maybe Shelley.MetaData
        -> TxBody Shelley
 
+deriving instance Eq (TxBody Byron)
+deriving instance Show (TxBody Byron)
+
+deriving instance Eq (TxBody Shelley)
+deriving instance Show (TxBody Shelley)
 
 instance HasTypeProxy (TxBody Byron) where
     data AsType (TxBody Byron) = AsByronTxBody
@@ -645,18 +937,38 @@ instance HasTypeProxy (TxBody Shelley) where
 
 
 instance SerialiseAsCBOR (TxBody Byron) where
-    serialiseToCBOR (ByronTxBody txbody) = CBOR.serialize' txbody
+    serialiseToCBOR (ByronTxBody txbody) =
+      recoverBytes txbody
 
-    deserialiseFromCBOR AsByronTxBody bs =
-      ByronTxBody <$> CBOR.decodeFull' bs
+    deserialiseFromCBOR AsByronTxBody bs = do
+      ByronTxBody <$>
+        CBOR.decodeFullAnnotatedBytes
+          "Byron TxBody"
+          CBOR.fromCBORAnnotated
+          (LBS.fromStrict bs)
 
 instance SerialiseAsCBOR (TxBody Shelley) where
-    serialiseToCBOR (ShelleyTxBody txbody) =
-      CBOR.serialize' txbody
+    serialiseToCBOR (ShelleyTxBody txbody txmetadata) =
+      CBOR.serializeEncoding' $
+          CBOR.encodeListLen 2
+       <> CBOR.toCBOR txbody
+       <> CBOR.encodeNullMaybe CBOR.toCBOR txmetadata
 
     deserialiseFromCBOR AsShelleyTxBody bs =
-      ShelleyTxBody <$>
-        CBOR.decodeAnnotator "Shelley TxBody" fromCBOR (LBS.fromStrict bs)
+      CBOR.decodeAnnotator
+        "Shelley TxBody"
+        decodeAnnotatedPair
+        (LBS.fromStrict bs)
+      where
+        decodeAnnotatedPair :: CBOR.Decoder s (CBOR.Annotator (TxBody Shelley))
+        decodeAnnotatedPair =  do
+          CBOR.decodeListLenOf 2
+          txbody     <- fromCBOR
+          txmetadata <- CBOR.decodeNullMaybe fromCBOR
+          return $ CBOR.Annotator $ \fbs ->
+            ShelleyTxBody
+              (flip CBOR.runAnnotator fbs txbody)
+              (flip CBOR.runAnnotator fbs <$> txmetadata)
 
 
 instance HasTextEnvelope (TxBody Byron) where
@@ -666,28 +978,88 @@ instance HasTextEnvelope (TxBody Shelley) where
     textEnvelopeType _ = "TxUnsignedShelley"
 
 
-makeByronTransaction :: [TxIn] -> [TxOut Byron] -> TxBody Byron
-makeByronTransaction = undefined
+data ByronTxBodyConversionError =
+       ByronTxBodyEmptyTxIns
+     | ByronTxBodyEmptyTxOuts
+     | ByronTxBodyLovelaceOverflow (TxOut Byron)
+     deriving Show
 
-data TxOptional =
-     TxOptional {
+makeByronTransaction :: [TxIn]
+                     -> [TxOut Byron]
+                     -> Either ByronTxBodyConversionError
+                               (TxBody Byron)
+makeByronTransaction ins outs = do
+    ins'  <- NonEmpty.nonEmpty ins        ?! ByronTxBodyEmptyTxIns
+    let ins'' = NonEmpty.map toByronTxIn ins'
+
+    outs'  <- NonEmpty.nonEmpty outs      ?! ByronTxBodyEmptyTxOuts
+    outs'' <- traverse
+                (\out -> toByronTxOut out ?! ByronTxBodyLovelaceOverflow out)
+                outs'
+    return $
+      ByronTxBody $
+        reAnnotate $
+          Annotated
+            (Byron.UnsafeTx ins'' outs'' (Byron.mkAttributes ()))
+            ()
+
+
+data TxExtraContent =
+     TxExtraContent {
        txMetadata        :: Maybe TxMetadata,
        txWithdrawals     :: [(StakeAddress, Lovelace)],
        txCertificates    :: [Certificate],
-       txProtocolUpdates :: Maybe ProtocolUpdates
+       txUpdateProposal  :: Maybe UpdateProposal
      }
 
-data TxMetadata
-data Certificate
-type ProtocolUpdates = Shelley.ProposedPPUpdates ShelleyCrypto
+txExtraContentEmpty :: TxExtraContent
+txExtraContentEmpty =
+    TxExtraContent {
+      txMetadata        = Nothing,
+      txWithdrawals     = [],
+      txCertificates    = [],
+      txUpdateProposal  = Nothing
+    }
 
-makeShelleyTransaction :: TxOptional
-                       -> SlotNo
-                       -> Lovelace
+type TxFee = Lovelace
+type TTL   = SlotNo
+
+makeShelleyTransaction :: TxExtraContent
+                       -> TTL
+                       -> TxFee
                        -> [TxIn]
                        -> [TxOut anyera]
                        -> TxBody Shelley
-makeShelleyTransaction = undefined
+makeShelleyTransaction TxExtraContent {
+                         txMetadata,
+                         txWithdrawals,
+                         txCertificates,
+                         txUpdateProposal
+                       } ttl fee ins outs =
+    --TODO: validate the txins are not empty, and tx out coin values are in range
+    ShelleyTxBody
+      (Shelley.TxBody
+        (Set.fromList (map toShelleyTxIn ins))
+        (Seq.fromList (map toShelleyTxOut outs))
+        (Seq.fromList [ cert | Certificate cert <- txCertificates ])
+        (toShelleyWdrl txWithdrawals)
+        (toShelleyLovelace fee)
+        ttl
+        (toShelleyUpdate <$> maybeToStrictMaybe txUpdateProposal)
+        (toShelleyMetadataHash <$> maybeToStrictMaybe txMetadata))
+      (toShelleyMetadata <$> txMetadata)
+  where
+    toShelleyUpdate (UpdateProposal p) = p
+
+    toShelleyMetadata     (TxMetadata m) = m
+    toShelleyMetadataHash (TxMetadata m) = Shelley.hashMetaData m
+
+    toShelleyWdrl :: [(StakeAddress, Lovelace)] -> Shelley.Wdrl ShelleyCrypto
+    toShelleyWdrl wdrls =
+        Shelley.Wdrl $
+          Map.fromList
+            [ (toShelleyStakeAddr stakeAddr, toShelleyLovelace value)
+            | (stakeAddr, value) <- wdrls ]
 
 
 -- ----------------------------------------------------------------------------
@@ -704,6 +1076,11 @@ data Tx era where
        :: Shelley.Tx ShelleyCrypto
        -> Tx Shelley
 
+deriving instance Eq (Tx Byron)
+deriving instance Show (Tx Byron)
+
+deriving instance Eq (Tx Shelley)
+deriving instance Show (Tx Shelley)
 
 instance HasTypeProxy (Tx Byron) where
     data AsType (Tx Byron) = AsByronTx
@@ -729,7 +1106,6 @@ instance SerialiseAsCBOR (Tx Shelley) where
       ShelleyTx <$>
         CBOR.decodeAnnotator "Shelley Tx" fromCBOR (LBS.fromStrict bs)
 
-
 instance HasTextEnvelope (Tx Byron) where
     textEnvelopeType _ = "TxSignedByron"
 
@@ -743,6 +1119,10 @@ data Witness era where
        :: Byron.TxInWitness
        -> Witness Byron
 
+     ShelleyBootstrapWitness
+       :: Shelley.BootstrapWitness ShelleyCrypto
+       -> Witness Shelley
+
      ShelleyKeyWitness
        :: Shelley.WitVKey ShelleyCrypto Shelley.Witness
        -> Witness Shelley
@@ -751,6 +1131,11 @@ data Witness era where
        :: Shelley.MultiSig ShelleyCrypto
        -> Witness Shelley
 
+deriving instance Eq (Witness Byron)
+deriving instance Show (Witness Byron)
+
+deriving instance Eq (Witness Shelley)
+deriving instance Show (Witness Shelley)
 
 instance HasTypeProxy (Witness Byron) where
     data AsType (Witness Byron) = AsByronWitness
@@ -772,8 +1157,10 @@ instance SerialiseAsCBOR (Witness Shelley) where
         encodeShelleyWitness :: Witness Shelley -> CBOR.Encoding
         encodeShelleyWitness (ShelleyKeyWitness    wit) =
             CBOR.encodeListLen 2 <> CBOR.encodeWord 0 <> toCBOR wit
-        encodeShelleyWitness (ShelleyScriptWitness wit) =
+        encodeShelleyWitness (ShelleyBootstrapWitness wit) =
             CBOR.encodeListLen 2 <> CBOR.encodeWord 1 <> toCBOR wit
+        encodeShelleyWitness (ShelleyScriptWitness wit) =
+            CBOR.encodeListLen 2 <> CBOR.encodeWord 2 <> toCBOR wit
 
     deserialiseFromCBOR AsShelleyWitness bs =
         CBOR.decodeAnnotator "Shelley Witness"
@@ -785,7 +1172,8 @@ instance SerialiseAsCBOR (Witness Shelley) where
           t <- CBOR.decodeWord
           case t of
             0 -> fmap (fmap ShelleyKeyWitness) fromCBOR
-            1 -> fmap (pure . ShelleyScriptWitness) fromCBOR
+            1 -> fmap (fmap ShelleyBootstrapWitness) fromCBOR
+            2 -> fmap (pure . ShelleyScriptWitness) fromCBOR
             _ -> CBOR.cborError $ CBOR.DecoderErrorUnknownTag
                                     "Shelley Witness" (fromIntegral t)
 
@@ -797,38 +1185,228 @@ instance HasTextEnvelope (Witness Shelley) where
 
 
 getTxBody :: Tx era -> TxBody era
-getTxBody (ByronTx _tx) = undefined
-getTxBody (ShelleyTx _tx) = undefined
+getTxBody (ByronTx Byron.ATxAux { Byron.aTaTx = txbody }) =
+    ByronTxBody txbody
+
+getTxBody (ShelleyTx Shelley.Tx {
+                       Shelley._body     = txbody,
+                       Shelley._metadata = txmetadata
+                     }) =
+    ShelleyTxBody txbody (strictMaybeToMaybe txmetadata)
 
 
 getTxWitnesses :: Tx era -> [Witness era]
-getTxWitnesses (ByronTx _tx) = undefined
-getTxWitnesses (ShelleyTx _tx) = undefined
+getTxWitnesses (ByronTx Byron.ATxAux { Byron.aTaWitness = witnesses }) =
+    map ByronKeyWitness
+  . Vector.toList
+  . unAnnotated
+  $ witnesses
+
+getTxWitnesses (ShelleyTx Shelley.Tx {
+                       Shelley._witnessSet =
+                         Shelley.WitnessSet {
+                           Shelley.addrWits,
+                           Shelley.bootWits,
+                           Shelley.msigWits
+                         }
+                     }) =
+    map ShelleyBootstrapWitness (Set.elems bootWits)
+ ++ map ShelleyKeyWitness       (Set.elems addrWits)
+ ++ map ShelleyScriptWitness    (Map.elems msigWits)
 
 
 makeSignedTransaction :: [Witness era]
                       -> TxBody era
                       -> Tx era
-makeSignedTransaction = undefined
+makeSignedTransaction witnesses (ByronTxBody txbody) =
+    ByronTx
+  . Byron.annotateTxAux
+  $ Byron.mkTxAux
+      (unAnnotated txbody)
+      (Vector.fromList (map selectByronWitness witnesses))
+  where
+    selectByronWitness :: Witness Byron -> Byron.TxInWitness
+    selectByronWitness (ByronKeyWitness w) = w
+
+makeSignedTransaction witnesses (ShelleyTxBody txbody txmetadata) =
+    ShelleyTx $
+      Shelley.Tx
+        txbody
+        Shelley.WitnessSet {
+          Shelley.bootWits = Set.fromList
+                               [ w | ShelleyBootstrapWitness w <- witnesses ],
+          Shelley.addrWits = Set.fromList
+                               [ w | ShelleyKeyWitness w <- witnesses ],
+          Shelley.msigWits = Map.fromList
+                               [ (Shelley.hashScript sw, sw)
+                               | ShelleyScriptWitness sw <- witnesses ]
+        }
+        (maybeToStrictMaybe txmetadata)
+
+makeByronKeyWitness :: NetworkId
+                    -> TxBody Byron
+                    -> SigningKey ByronKey
+                    -> Witness Byron
+makeByronKeyWitness nw (ByronTxBody txbody) =
+    let txhash :: Byron.Hash Byron.Tx
+        txhash = Byron.hashDecoded txbody
+
+        pm :: Byron.ProtocolMagicId
+        pm = toByronProtocolMagicId nw
+
+        -- To allow sharing of the txhash computation across many signatures we
+        -- define and share the txhash outside the lambda for the signing key:
+     in \(ByronSigningKey sk) ->
+        ByronKeyWitness $
+          Byron.VKWitness
+            (Byron.toVerification sk)
+            (Byron.sign pm Byron.SignTx sk (Byron.TxSigData txhash))
+
+makeShelleyBootstrapWitness :: NetworkId
+                            -> TxBody Shelley
+                            -> SigningKey ByronKey
+                            -> Witness Shelley
+makeShelleyBootstrapWitness nw (ShelleyTxBody txbody _) (ByronSigningKey sk) =
+    ShelleyBootstrapWitness $
+      -- Byron era witnesses were weird. This reveals all that weirdness.
+      Shelley.BootstrapWitness {
+        Shelley.bwKey       = vk,
+        Shelley.bwSig       = signature,
+        Shelley.bwChainCode = chainCode,
+        Shelley.bwPadding   = padding
+      }
+  where
+    -- Starting with the easy bits: we /can/ convert the Byron verification key
+    -- to a the pair of a Shelley verification key plus the chain code.
+    --
+    (vk, chainCode) = Shelley.unpackByronVKey (Byron.toVerification sk)
+
+    -- Now the hairy bits.
+    --
+    -- Byron era signing keys were all /extended/ ed25519 keys. We have to
+    -- produce a signature using this extended signing key directly. They
+    -- /cannot/ be converted to a plain (non-extended) signing keys. Since we
+    -- now support extended signing keys for the Shelley too, we are able to
+    -- reuse that here.
+    --
+    signature :: Shelley.SignedDSIGN ShelleyCrypto
+                  (Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto))
+    signature = makeShelleyKeyWitnessSignature
+                  txhash
+                  -- Make the signature with the extended key directly:
+                  (ShelleyExtendedSigningKey (Byron.unSigningKey sk))
+
+    txhash :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
+    txhash = Crypto.hash txbody
+
+    -- And finally the really funky bits. We need to provide the extra prefix
+    -- and suffix bytes necessary to reconstruct the mini-Merkel tree that is
+    -- a Byron address. The suffix bytes depend on the address attributes.
+
+    padding = Shelley.byronVerKeyAddressPadding $
+                Byron.mkAttributes Byron.AddrAttributes {
+                  Byron.aaVKDerivationPath = Nothing,
+                  Byron.aaNetworkMagic     = toByronNetworkMagic nw
+                }
+
+data ShelleyWitnessSigningKey =
+       WitnessPaymentKey         (SigningKey PaymentKey)
+     | WitnessPaymentExtendedKey (SigningKey PaymentExtendedKey)
+     | WitnessStakeKey           (SigningKey StakeKey)
+     | WitnessStakePoolKey       (SigningKey StakePoolKey)
+     | WitnessGenesisDelegateKey (SigningKey GenesisDelegateKey)
+     | WitnessGenesisUTxOKey     (SigningKey GenesisUTxOKey)
 
 
-byronKeyWitness :: NetworkId -> SigningKey ByronKey -> TxBody era -> Witness Byron
-byronKeyWitness = undefined
+makeShelleyKeyWitness :: TxBody Shelley
+                      -> ShelleyWitnessSigningKey
+                      -> Witness Shelley
+makeShelleyKeyWitness (ShelleyTxBody txbody _) =
+    let txhash :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
+        txhash = Crypto.hash txbody
+
+        -- To allow sharing of the txhash computation across many signatures we
+        -- define and share the txhash outside the lambda for the signing key:
+     in \wsk ->
+        let sk        = toShelleySigningKey wsk
+            vk        = getShelleyKeyWitnessVerificationKey sk
+            signature = makeShelleyKeyWitnessSignature txhash sk
+         in ShelleyKeyWitness $
+              Shelley.WitVKey vk signature
 
 
-shelleyKeyWitness :: SigningKey keyrole -> TxBody era -> Witness Shelley
-shelleyKeyWitness = undefined
--- this may need some class constraint on the keyrole, we can sign with:
+-- | We support making key witnesses with both normal and extended signing keys.
 --
---  ByronKey     -- for utxo inputs at byron addresses
---  PaymentKey   -- for utxo inputs, including multi-sig
---  StakeKey     -- for stake addr withdrawals and retiring and pool owners
---  StakePoolKey -- for stake pool ops
---  GenesisDelegateKey -- for update proposals, MIR etc
+data ShelleySigningKey =
+       -- | A normal ed25519 signing key
+       ShelleyNormalSigningKey   (Shelley.SignKeyDSIGN ShelleyCrypto)
+
+       -- | An extended ed25519 signing key
+     | ShelleyExtendedSigningKey Crypto.HD.XPrv
 
 
-shelleyScriptWitness :: Script -> TxId -> Witness Shelley
-shelleyScriptWitness = undefined
+toShelleySigningKey :: ShelleyWitnessSigningKey -> ShelleySigningKey
+toShelleySigningKey key = case key of
+  WitnessPaymentKey     (PaymentSigningKey     sk) -> ShelleyNormalSigningKey sk
+  WitnessStakeKey       (StakeSigningKey       sk) -> ShelleyNormalSigningKey sk
+  WitnessStakePoolKey   (StakePoolSigningKey   sk) -> ShelleyNormalSigningKey sk
+  WitnessGenesisUTxOKey (GenesisUTxOSigningKey sk) -> ShelleyNormalSigningKey sk
+  WitnessGenesisDelegateKey (GenesisDelegateSigningKey sk) ->
+    ShelleyNormalSigningKey sk
+
+  -- The special case
+  WitnessPaymentExtendedKey (PaymentExtendedSigningKey sk) ->
+    ShelleyExtendedSigningKey sk
+
+
+getShelleyKeyWitnessVerificationKey
+  :: ShelleySigningKey
+  -> Shelley.VKey Shelley.Witness ShelleyCrypto
+getShelleyKeyWitnessVerificationKey (ShelleyNormalSigningKey sk) =
+      (Shelley.coerceKeyRole :: Shelley.VKey Shelley.Payment ShelleyCrypto
+                             -> Shelley.VKey Shelley.Witness ShelleyCrypto)
+    . (\(PaymentVerificationKey vk) -> vk)
+    . getVerificationKey
+    . PaymentSigningKey
+    $ sk
+
+getShelleyKeyWitnessVerificationKey (ShelleyExtendedSigningKey sk) =
+      (Shelley.coerceKeyRole :: Shelley.VKey Shelley.Payment ShelleyCrypto
+                             -> Shelley.VKey Shelley.Witness ShelleyCrypto)
+    . (\(PaymentVerificationKey vk) -> vk)
+    . (castVerificationKey :: VerificationKey PaymentExtendedKey
+                           -> VerificationKey PaymentKey)
+    . getVerificationKey
+    . PaymentExtendedSigningKey
+    $ sk
+
+
+makeShelleyKeyWitnessSignature
+  :: Shelley.Hash ShelleyCrypto (Shelley.TxBody ShelleyCrypto)
+  -> ShelleySigningKey
+  -> Shelley.SignedDSIGN ShelleyCrypto
+                         (Shelley.Hash ShelleyCrypto
+                                       (Shelley.TxBody ShelleyCrypto))
+makeShelleyKeyWitnessSignature txhash (ShelleyNormalSigningKey sk) =
+    Crypto.signedDSIGN () txhash sk
+
+makeShelleyKeyWitnessSignature txhash (ShelleyExtendedSigningKey sk) =
+    fromXSignature $
+      Crypto.HD.sign
+        BS.empty  -- passphrase for (unused) in-mem encryption
+        sk
+        (Crypto.getHash txhash)
+  where
+    fromXSignature :: Crypto.HD.XSignature
+                   -> Shelley.SignedDSIGN ShelleyCrypto b
+    fromXSignature =
+        Crypto.SignedDSIGN
+      . fromMaybe impossible
+      . Crypto.rawDeserialiseSigDSIGN
+      . Crypto.HD.unXSignature
+
+    impossible =
+      error "makeShelleyKeyWitnessSignature: byron and shelley signature sizes do not match"
 
 
 -- order of signing keys must match txins
@@ -836,13 +1414,108 @@ signByronTransaction :: NetworkId
                      -> TxBody Byron
                      -> [SigningKey ByronKey]
                      -> Tx Byron
-signByronTransaction = undefined
+signByronTransaction nw txbody sks =
+    makeSignedTransaction witnesses txbody
+  where
+    witnesses = map (makeByronKeyWitness nw txbody) sks
 
 -- signing keys is a set
 signShelleyTransaction :: TxBody Shelley
-                       -> [SigningKey Shelley]
+                       -> [ShelleyWitnessSigningKey]
                        -> Tx Shelley
-signShelleyTransaction = undefined
+signShelleyTransaction txbody sks =
+    makeSignedTransaction witnesses txbody
+  where
+    witnesses = map (makeShelleyKeyWitness txbody) sks
+
+
+-- ----------------------------------------------------------------------------
+-- Transaction fees
+--
+
+-- | For a concrete fully-constructed transaction, determine the minimum fee
+-- that it needs to pay.
+--
+-- This function is simple, but if you are doing input selection then you
+-- probably want to consider estimateTransactionFee.
+--
+transactionFee :: Natural -- ^ The fixed tx fee
+               -> Natural -- ^ The tx fee per byte
+               -> Tx Shelley
+               -> Lovelace
+transactionFee txFeeFixed txFeePerByte (ShelleyTx tx) =
+    Lovelace (a * x + b)
+  where
+    a = toInteger txFeePerByte
+    x = Shelley.txsize tx
+    b = toInteger txFeeFixed
+
+--TODO: in the Byron case the per-byte is non-integral, would need different
+-- parameters. e.g. a new data type for fee params, byron vs shelley
+
+-- | This can estimate what the transaction fee will be, based on a starting
+-- base transaction, plus the numbers of the additional components of the
+-- transaction that may be added.
+--
+-- So for example with wallet coin selection, the base transaction should
+-- contain all the things not subject to coin selection (such as script inputs,
+-- metadata, withdrawals, certs etc)
+--
+estimateTransactionFee :: NetworkId
+                       -> Natural -- ^ The fixed tx fee
+                       -> Natural -- ^ The tx fee per byte
+                       -> Tx Shelley
+                       -> Int -- ^ The number of extra UTxO transaction inputs
+                       -> Int -- ^ The number of extra transaction outputs
+                       -> Int -- ^ The number of extra Shelley key witnesses
+                       -> Int -- ^ The number of extra Byron key witnesses
+                       -> Lovelace
+estimateTransactionFee nw txFeeFixed txFeePerByte (ShelleyTx tx) =
+    let Lovelace baseFee = transactionFee txFeeFixed txFeePerByte (ShelleyTx tx)
+     in \nInputs nOutputs nShelleyKeyWitnesses nByronKeyWitnesses ->
+
+        --TODO: this is fragile. Move something like this to the ledger and
+        -- make it robust, based on the txsize calculation.
+        let extraBytes :: Int
+            extraBytes = nInputs               * sizeInput
+                       + nOutputs              * sizeOutput
+                       + nByronKeyWitnesses    * sizeByronKeyWitnesses
+                       + nShelleyKeyWitnesses  * sizeShelleyKeyWitnesses
+
+         in Lovelace (baseFee + toInteger txFeePerByte * toInteger extraBytes)
+  where
+    sizeInput               = smallArray + uint + hashObj
+    sizeOutput              = smallArray + uint + address
+    sizeByronKeyWitnesses   = smallArray + keyObj + sigObj + ccodeObj
+                                         + paddingPref + paddingSuff
+    sizeShelleyKeyWitnesses = smallArray + keyObj + sigObj
+
+    smallArray  = 1
+    uint        = 5
+
+    hashObj     = 2 + hashLen
+    hashLen     = 32
+
+    keyObj      = 2 + keyLen
+    keyLen      = 32
+
+    sigObj      = 2 + sigLen
+    sigLen      = 64
+
+    ccodeObj    = 2 + ccodeLen
+    ccodeLen    = 32
+
+    address     = 2 + addrHeader + 2 * addrHashLen
+    addrHeader  = 1
+    addrHashLen = 28
+
+    paddingPref = 2 + BS.length (Shelley.paddingPrefix padding)
+    paddingSuff = 2 + BS.length (Shelley.paddingSuffix padding)
+    padding     = Shelley.byronVerKeyAddressPadding $
+                    Byron.mkAttributes Byron.AddrAttributes {
+                      Byron.aaVKDerivationPath = Nothing,
+                      Byron.aaNetworkMagic     = toByronNetworkMagic nw
+                    }
 
 
 -- ----------------------------------------------------------------------------
@@ -852,6 +1525,660 @@ signShelleyTransaction = undefined
 data Script
 
 newtype instance Hash Script = ScriptHash (Shelley.ScriptHash ShelleyCrypto)
+  deriving (Eq, Ord, Show)
+
+
+makeShelleyScriptWitness :: Script -> Witness Shelley
+makeShelleyScriptWitness = undefined
+
+
+-- ----------------------------------------------------------------------------
+-- Certificates embedded in transactions
+--
+
+newtype Certificate = Certificate (Shelley.DCert ShelleyCrypto)
+  deriving stock (Eq, Show)
+  deriving newtype (ToCBOR, FromCBOR)
+  deriving anyclass SerialiseAsCBOR
+
+instance HasTypeProxy Certificate where
+    data AsType Certificate = AsCertificate
+    proxyToAsType _ = AsCertificate
+
+instance HasTextEnvelope Certificate where
+    textEnvelopeType _ = "Certificate"
+    textEnvelopeDefaultDescr (Certificate cert) = case cert of
+      Shelley.DCertDeleg (Shelley.RegKey {})    -> "Stake address registration"
+      Shelley.DCertDeleg (Shelley.DeRegKey {})  -> "Stake address de-registration"
+      Shelley.DCertDeleg (Shelley.Delegate {})  -> "Stake address delegation"
+      Shelley.DCertPool (Shelley.RegPool {})    -> "Pool registration"
+      Shelley.DCertPool (Shelley.RetirePool {}) -> "Pool retirement"
+      Shelley.DCertGenesis{}                    -> "Genesis key delegation"
+      Shelley.DCertMir{}                        -> "MIR"
+
+makeStakeAddressRegistrationCertificate
+  :: StakeCredential
+  -> Certificate
+makeStakeAddressRegistrationCertificate stakecred =
+    Certificate
+  . Shelley.DCertDeleg
+  $ Shelley.RegKey
+      (toShelleyStakeCredential stakecred)
+
+makeStakeAddressDeregistrationCertificate
+  :: StakeCredential
+  -> Certificate
+makeStakeAddressDeregistrationCertificate stakecred =
+    Certificate
+  . Shelley.DCertDeleg
+  $ Shelley.DeRegKey
+      (toShelleyStakeCredential stakecred)
+
+makeStakeAddressDelegationCertificate
+  :: StakeCredential
+  -> PoolId
+  -> Certificate
+makeStakeAddressDelegationCertificate stakecred (StakePoolKeyHash poolid) =
+    Certificate
+  . Shelley.DCertDeleg
+  . Shelley.Delegate
+  $ Shelley.Delegation
+      (toShelleyStakeCredential stakecred)
+      poolid
+
+makeGenesisKeyDelegationCertificate
+  :: Hash GenesisKey
+  -> Hash GenesisDelegateKey
+  -> Hash VrfKey
+  -> Certificate
+makeGenesisKeyDelegationCertificate (GenesisKeyHash         genesiskh)
+                                    (GenesisDelegateKeyHash delegatekh)
+                                    (VrfKeyHash             vrfkh) =
+    Certificate
+  . Shelley.DCertGenesis
+  $ Shelley.GenesisDelegCert
+      genesiskh
+      delegatekh
+      vrfkh
+
+makeMIRCertificate
+  :: MIRPot
+  -> [(StakeCredential, Lovelace)]
+  -> Certificate
+makeMIRCertificate mirpot amounts =
+    Certificate
+  . Shelley.DCertMir
+  $ Shelley.MIRCert
+      mirpot
+      (Map.fromListWith (+)
+         [ (toShelleyStakeCredential sc, toShelleyLovelace v)
+         | (sc, v) <- amounts ])
+
+
+
+-- ----------------------------------------------------------------------------
+-- Stake pool certificates
+--
+
+makeStakePoolRegistrationCertificate
+  :: StakePoolParameters
+  -> Certificate
+makeStakePoolRegistrationCertificate poolparams =
+    Certificate
+  . Shelley.DCertPool
+  $ Shelley.RegPool
+      (toShelleyPoolParams poolparams)
+
+makeStakePoolRetirementCertificate
+  :: PoolId
+  -> EpochNo
+  -> Certificate
+makeStakePoolRetirementCertificate (StakePoolKeyHash poolid) epochno =
+    Certificate
+  . Shelley.DCertPool
+  $ Shelley.RetirePool
+      poolid
+      epochno
+
+type PoolId = Hash StakePoolKey
+
+data StakePoolParameters =
+     StakePoolParameters {
+       stakePoolId            :: PoolId,
+       stakePoolVRF           :: Hash VrfKey,
+       stakePoolCost          :: Lovelace,
+       stakePoolMargin        :: Rational,
+       stakePoolRewardAccount :: StakeAddress,
+       stakePoolPledge        :: Lovelace,
+       stakePoolOwners        :: [Hash StakeKey],
+       stakePoolRelays        :: [StakePoolRelay],
+       stakePoolMetadata      :: Maybe StakePoolMetadataReference
+     }
+  deriving (Eq, Show)
+
+data StakePoolRelay =
+
+       -- | One or both of IPv4 & IPv6
+       StakePoolRelayIp
+          (Maybe IPv4) (Maybe IPv6) (Maybe PortNumber)
+
+       -- | An DNS name pointing to a @A@ or @AAAA@ record.
+     | StakePoolRelayDnsARecord
+          ByteString (Maybe PortNumber)
+
+       -- | A DNS name pointing to a @SRV@ record.
+     | StakePoolRelayDnsSrvRecord
+          ByteString
+
+  deriving (Eq, Show)
+
+data StakePoolMetadataReference =
+     StakePoolMetadataReference {
+       stakePoolMetadataURL  :: URI.URI,
+       stakePoolMetadataHash :: Hash StakePoolMetadata
+     }
+  deriving (Eq, Show)
+
+toShelleyPoolParams :: StakePoolParameters -> Shelley.PoolParams ShelleyCrypto
+toShelleyPoolParams StakePoolParameters {
+                      stakePoolId            = StakePoolKeyHash poolkh
+                    , stakePoolVRF           = VrfKeyHash vrfkh
+                    , stakePoolCost
+                    , stakePoolMargin
+                    , stakePoolRewardAccount
+                    , stakePoolPledge
+                    , stakePoolOwners
+                    , stakePoolRelays
+                    , stakePoolMetadata
+                    } =
+    --TODO: validate pool parameters
+    Shelley.PoolParams {
+      Shelley._poolPubKey = poolkh
+    , Shelley._poolVrf    = vrfkh
+    , Shelley._poolPledge = toShelleyLovelace stakePoolPledge
+    , Shelley._poolCost   = toShelleyLovelace stakePoolCost
+    , Shelley._poolMargin = Shelley.truncateUnitInterval
+                              (fromRational stakePoolMargin)
+    , Shelley._poolRAcnt  = toShelleyStakeAddr stakePoolRewardAccount
+    , Shelley._poolOwners = Set.fromList
+                              [ kh | StakeKeyHash kh <- stakePoolOwners ]
+    , Shelley._poolRelays = Seq.fromList
+                              (map toShelleyStakePoolRelay stakePoolRelays)
+    , Shelley._poolMD     = toShelleyPoolMetaData <$>
+                              maybeToStrictMaybe stakePoolMetadata
+    }
+  where
+    toShelleyStakePoolRelay :: StakePoolRelay -> Shelley.StakePoolRelay
+    toShelleyStakePoolRelay (StakePoolRelayIp mipv4 mipv6 mport) =
+      Shelley.SingleHostAddr
+        (fromIntegral <$> maybeToStrictMaybe mport)
+        (maybeToStrictMaybe mipv4)
+        (maybeToStrictMaybe mipv6)
+
+    toShelleyStakePoolRelay (StakePoolRelayDnsARecord dnsname mport) =
+      Shelley.SingleHostName
+        (fromIntegral <$> maybeToStrictMaybe mport)
+        (toShelleyDnsName dnsname)
+
+    toShelleyStakePoolRelay (StakePoolRelayDnsSrvRecord dnsname) =
+      Shelley.MultiHostName
+        (toShelleyDnsName dnsname)
+
+    toShelleyPoolMetaData :: StakePoolMetadataReference -> Shelley.PoolMetaData
+    toShelleyPoolMetaData StakePoolMetadataReference {
+                            stakePoolMetadataURL
+                          , stakePoolMetadataHash = StakePoolMetadataHash mdh
+                          } =
+      Shelley.PoolMetaData {
+        Shelley._poolMDUrl  = toShelleyUrl stakePoolMetadataURL
+      , Shelley._poolMDHash = Crypto.getHash mdh
+      }
+
+    toShelleyDnsName :: ByteString -> Shelley.DnsName
+    toShelleyDnsName = fromMaybe (error "toShelleyDnsName: invalid dns name. TODO: proper validation")
+                     . Shelley.textToDns
+                     . Text.decodeLatin1
+
+    toShelleyUrl :: URI.URI -> Shelley.Url
+    toShelleyUrl uri = fromMaybe (error "toShelleyUrl: invalid url. TODO: proper validation")
+                     . Shelley.textToUrl
+                     . Text.pack
+                     $ URI.uriToString id uri ""
+
+
+-- ----------------------------------------------------------------------------
+-- Stake pool metadata
+--
+
+-- | A representation of the required fields for off-chain stake pool metadata.
+--
+data StakePoolMetadata =
+     StakePoolMetadata {
+
+        -- | A name of up to 50 characters.
+        stakePoolName :: !Text
+
+        -- | A description of up to 255 characters.
+     , stakePoolDescription :: !Text
+
+        -- | A ticker of 3-5 characters, for a compact display of stake pools in
+        -- a wallet.
+     , stakePoolTicker :: !Text
+
+       -- | A URL to a homepage with additional information about the pool.
+       -- n.b. the spec does not specify a character limit for this field.
+     , stakePoolHomepage :: !Text
+     }
+  deriving (Eq, Show)
+
+newtype instance Hash StakePoolMetadata =
+                 StakePoolMetadataHash (Crypto.Hash (Shelley.HASH ShelleyCrypto)
+                                                    ByteString)
+    deriving (Eq, Show)
+
+instance HasTypeProxy StakePoolMetadata where
+    data AsType StakePoolMetadata = AsStakePoolMetadata
+    proxyToAsType _ = AsStakePoolMetadata
+
+instance SerialiseAsRawBytes (Hash StakePoolMetadata) where
+    serialiseToRawBytes (StakePoolMetadataHash h) = Crypto.getHash h
+
+    deserialiseFromRawBytes (AsHash AsStakePoolMetadata) bs =
+      StakePoolMetadataHash <$> Crypto.hashFromBytes bs
+
+--TODO: instance ToJSON StakePoolMetadata where
+
+instance FromJSON StakePoolMetadata where
+    parseJSON =
+        Aeson.withObject "StakePoolMetadata" $ \obj ->
+          StakePoolMetadata
+            <$> parseName obj
+            <*> parseDescription obj
+            <*> parseTicker obj
+            <*> obj .: "homepage"
+
+      where
+        -- Parse and validate the stake pool metadata name from a JSON object.
+        -- The name must be 50 characters or fewer.
+        --
+        parseName :: Aeson.Object -> Aeson.Parser Text
+        parseName obj = do
+          name <- obj .: "name"
+          if Text.length name <= 50
+            then pure name
+            else fail $ "\"name\" must have at most 50 characters, but it has "
+                     <> show (Text.length name)
+                     <> " characters."
+
+        -- Parse and validate the stake pool metadata description
+        -- The description must be 255 characters or fewer.
+        --
+        parseDescription :: Aeson.Object -> Aeson.Parser Text
+        parseDescription obj = do
+          description <- obj .: "description"
+          if Text.length description <= 255
+            then pure description
+            else fail $
+                 "\"description\" must have at most 255 characters, but it has "
+              <> show (Text.length description)
+              <> " characters."
+
+        -- | Parse and validate the stake pool ticker description
+        -- The ticker must be 3 to 5 characters long.
+        --
+        parseTicker :: Aeson.Object -> Aeson.Parser Text
+        parseTicker obj = do
+          ticker <- obj .: "ticker"
+          let tickerLen = Text.length ticker
+          if tickerLen >= 3 && tickerLen <= 5
+            then pure ticker
+            else fail $
+                 "\"ticker\" must have at least 3 and at most 5 "
+              <> "characters, but it has "
+              <> show (Text.length ticker)
+              <> " characters."
+
+-- | A stake pool metadata validation error.
+data StakePoolMetadataValidationError
+  = StakePoolMetadataJsonDecodeError !String
+  | StakePoolMetadataInvalidLengthError
+    -- ^ The length of the JSON-encoded stake pool metadata exceeds the
+    -- maximum.
+      !Int
+      -- ^ Maximum byte length.
+      !Int
+      -- ^ Actual byte length.
+  deriving Show
+
+instance Error StakePoolMetadataValidationError where
+    displayError (StakePoolMetadataJsonDecodeError errStr) = errStr
+    displayError (StakePoolMetadataInvalidLengthError maxLen actualLen) =
+         "Stake pool metadata must consist of at most "
+      <> show maxLen
+      <> " bytes, but it consists of "
+      <> show actualLen
+      <> " bytes."
+
+-- | Decode and validate the provided JSON-encoded bytes as 'StakePoolMetadata'.
+-- Return the decoded metadata and the hash of the original bytes.
+--
+validateAndHashStakePoolMetadata
+  :: ByteString
+  -> Either StakePoolMetadataValidationError
+            (StakePoolMetadata, Hash StakePoolMetadata)
+validateAndHashStakePoolMetadata bs
+  | BS.length bs <= 512 = do
+      md <- first StakePoolMetadataJsonDecodeError
+                  (Aeson.eitherDecodeStrict' bs)
+      let mdh = StakePoolMetadataHash (Crypto.hashRaw id bs)
+      return (md, mdh)
+  | otherwise = Left $ StakePoolMetadataInvalidLengthError 512 (BS.length bs)
+
+
+
+-- ----------------------------------------------------------------------------
+-- Metadata embedded in transactions
+--
+
+newtype TxMetadata = TxMetadata Shelley.MetaData
+    deriving stock (Eq, Show)
+
+data TxMetadataValue = TxMetaNumber Integer -- -2^64 .. 2^64-1
+                     | TxMetaBytes  ByteString
+                     | TxMetaText   Text
+                     | TxMetaList   [TxMetadataValue]
+                     | TxMetaMap    [(TxMetadataValue, TxMetadataValue)]
+    deriving stock (Eq, Show)
+
+-- | Merge metadata maps. When there are clashing entries the left hand side
+-- takes precedence.
+--
+instance Semigroup TxMetadata where
+    TxMetadata (Shelley.MetaData m1) <> TxMetadata (Shelley.MetaData m2) =
+      TxMetadata (Shelley.MetaData (m1 <> m2))
+
+instance Monoid TxMetadata where
+    mempty = TxMetadata (Shelley.MetaData mempty)
+
+instance HasTypeProxy TxMetadata where
+    data AsType TxMetadata = AsTxMetadata
+    proxyToAsType _ = AsTxMetadata
+
+instance SerialiseAsCBOR TxMetadata where
+    serialiseToCBOR (TxMetadata tx) =
+      CBOR.serialize' tx
+
+    deserialiseFromCBOR AsTxMetadata bs =
+      TxMetadata <$>
+        CBOR.decodeAnnotator "TxMetadata" fromCBOR (LBS.fromStrict bs)
+
+makeTransactionMetadata :: Map Word64 TxMetadataValue -> TxMetadata
+makeTransactionMetadata =
+    TxMetadata
+  . Shelley.MetaData
+  . Map.map toShelleyMetaDatum
+  where
+    toShelleyMetaDatum :: TxMetadataValue -> Shelley.MetaDatum
+    toShelleyMetaDatum (TxMetaNumber x) = Shelley.I x
+    toShelleyMetaDatum (TxMetaBytes  x) = Shelley.B x
+    toShelleyMetaDatum (TxMetaText   x) = Shelley.S x
+    toShelleyMetaDatum (TxMetaList  xs) = Shelley.List
+                                            [ toShelleyMetaDatum x | x <- xs ]
+    toShelleyMetaDatum (TxMetaMap   xs) = Shelley.Map
+                                            [ (toShelleyMetaDatum k,
+                                               toShelleyMetaDatum v)
+                                            | (k,v) <- xs ]
+
+
+-- ----------------------------------------------------------------------------
+-- Protocol updates embedded in transactions
+--
+
+newtype UpdateProposal = UpdateProposal (Shelley.Update ShelleyCrypto)
+    deriving stock (Eq, Show)
+    deriving newtype (ToCBOR, FromCBOR)
+    deriving anyclass SerialiseAsCBOR
+
+instance HasTypeProxy UpdateProposal where
+    data AsType UpdateProposal = AsUpdateProposal
+    proxyToAsType _ = AsUpdateProposal
+
+instance HasTextEnvelope UpdateProposal where
+    textEnvelopeType _ = "Shelley update proposal"
+
+data ProtocolParametersUpdate =
+     ProtocolParametersUpdate {
+
+       -- | Protocol version, major and minor. Updating the major version is
+       -- used to trigger hard forks.
+       --
+       protocolUpdateProtocolVersion :: Maybe (Natural, Natural),
+
+       -- | The decentralization parameter. This is fraction of slots that
+       -- belong to the BFT overlay schedule, rather than the Praos schedule.
+       -- So 1 means fully centralised, while 0 means fully decentralised.
+       --
+       -- This is the \"d\" parameter from the design document.
+       --
+       protocolUpdateDecentralization :: Maybe Rational,
+
+       -- | Extra entropy for the Praos per-epoch nonce.
+       --
+       -- This can be used to add extra entropy during the decentralisation
+       -- process. If the extra entropy can be demonstrated to be generated
+       -- randomly then this method can be used to show that the initial
+       -- federated operators did not subtly bias the initial schedule so that
+       -- they retain undue influence after decentralisation.
+       --
+       protocolUpdateExtraPraosEntropy :: Maybe (Maybe ByteString),
+
+       -- | The maximum permitted size of a block header.
+       --
+       -- This must be at least as big as the largest legitimate block headers
+       -- but should not be too much larger, to help prevent DoS attacks.
+       --
+       -- Caution: setting this to be smaller than legitimate block headers is
+       -- a sure way to brick the system!
+       --
+       protocolUpdateMaxBlockHeaderSize :: Maybe Natural,
+
+       -- | The maximum permitted size of the block body (that is, the block
+       -- payload, without the block header).
+       --
+       -- This should be picked with the Praos network delta security parameter
+       -- in mind. Making this too large can severely weaken the Praos
+       -- consensus properties.
+       --
+       -- Caution: setting this to be smaller than a transaction that can
+       -- change the protocol parameters is a sure way to brick the system!
+       --
+       protocolUpdateMaxBlockBodySize :: Maybe Natural,
+
+       -- | The maximum permitted size of a transaction.
+       --
+       -- Typically this should not be too high a fraction of the block size,
+       -- otherwise wastage from block fragmentation becomes a problem, and
+       -- the current implementation does not use any sophisticated box packing
+       -- algorithm.
+       --
+       protocolUpdateMaxTxSize :: Maybe Natural,
+
+       -- | The constant factor for the minimum fee calculation.
+       --
+       protocolUpdateTxFeeFixed :: Maybe Natural,
+
+       -- | The linear factor for the minimum fee calculation.
+       --
+       protocolUpdateTxFeePerByte :: Maybe Natural,
+
+       -- | The minimum permitted value for new UTxO entries, ie for
+       -- transaction outputs.
+       --
+       protocolUpdateMinUTxOValue :: Maybe Lovelace,
+
+       -- | The deposit required to register a stake address.
+       --
+       protocolUpdateStakeAddressDeposit :: Maybe Lovelace,
+
+       -- | The deposit required to register a stake pool.
+       --
+       protocolUpdateStakePoolDeposit :: Maybe Lovelace,
+
+       -- | The minimum value that stake pools are permitted to declare for
+       -- their cost parameter.
+       --
+       protocolUpdateMinPoolCost :: Maybe Lovelace,
+
+       -- | The maximum number of epochs into the future that stake pools
+       -- are permitted to schedule a retirement.
+       --
+       protocolUpdatePoolRetireMaxEpoch :: Maybe EpochNo,
+
+       -- | The equilibrium target number of stake pools.
+       --
+       -- This is the \"k\" incentives parameter from the design document.
+       --
+       protocolUpdateStakePoolTargetNum :: Maybe Natural,
+
+       -- | The influence of the pledge in stake pool rewards.
+       --
+       -- This is the \"a_0\" incentives parameter from the design document.
+       --
+       protocolUpdatePoolPledgeInfluence :: Maybe Rational,
+
+       -- | The monetary expansion rate. This determines the fraction of the
+       -- reserves that are added to the fee pot each epoch.
+       --
+       -- This is the \"rho\" incentives parameter from the design document.
+       --
+       protocolUpdateMonetaryExpansion :: Maybe Rational,
+
+       -- | The fraction of the fee pot each epoch that goes to the treasury.
+       --
+       -- This is the \"tau\" incentives parameter from the design document.
+       --
+       protocolUpdateTreasuryCut :: Maybe Rational
+    }
+  deriving (Eq, Show)
+
+instance Semigroup ProtocolParametersUpdate where
+    ppu1 <> ppu2 =
+      ProtocolParametersUpdate {
+        protocolUpdateProtocolVersion     = merge protocolUpdateProtocolVersion
+      , protocolUpdateDecentralization    = merge protocolUpdateDecentralization
+      , protocolUpdateExtraPraosEntropy   = merge protocolUpdateExtraPraosEntropy
+      , protocolUpdateMaxBlockHeaderSize  = merge protocolUpdateMaxBlockHeaderSize
+      , protocolUpdateMaxBlockBodySize    = merge protocolUpdateMaxBlockBodySize
+      , protocolUpdateMaxTxSize           = merge protocolUpdateMaxTxSize
+      , protocolUpdateTxFeeFixed          = merge protocolUpdateTxFeeFixed
+      , protocolUpdateTxFeePerByte        = merge protocolUpdateTxFeePerByte
+      , protocolUpdateMinUTxOValue        = merge protocolUpdateMinUTxOValue
+      , protocolUpdateStakeAddressDeposit = merge protocolUpdateStakeAddressDeposit
+      , protocolUpdateStakePoolDeposit    = merge protocolUpdateStakePoolDeposit
+      , protocolUpdateMinPoolCost         = merge protocolUpdateMinPoolCost
+      , protocolUpdatePoolRetireMaxEpoch  = merge protocolUpdatePoolRetireMaxEpoch
+      , protocolUpdateStakePoolTargetNum  = merge protocolUpdateStakePoolTargetNum
+      , protocolUpdatePoolPledgeInfluence = merge protocolUpdatePoolPledgeInfluence
+      , protocolUpdateMonetaryExpansion   = merge protocolUpdateMonetaryExpansion
+      , protocolUpdateTreasuryCut         = merge protocolUpdateTreasuryCut
+      }
+      where
+        -- prefer the right hand side:
+        merge :: (ProtocolParametersUpdate -> Maybe a) -> Maybe a
+        merge f = f ppu2 `mplus` f ppu1
+
+instance Monoid ProtocolParametersUpdate where
+    mempty =
+      ProtocolParametersUpdate {
+        protocolUpdateProtocolVersion     = Nothing
+      , protocolUpdateDecentralization    = Nothing
+      , protocolUpdateExtraPraosEntropy   = Nothing
+      , protocolUpdateMaxBlockHeaderSize  = Nothing
+      , protocolUpdateMaxBlockBodySize    = Nothing
+      , protocolUpdateMaxTxSize           = Nothing
+      , protocolUpdateTxFeeFixed          = Nothing
+      , protocolUpdateTxFeePerByte        = Nothing
+      , protocolUpdateMinUTxOValue        = Nothing
+      , protocolUpdateStakeAddressDeposit = Nothing
+      , protocolUpdateStakePoolDeposit    = Nothing
+      , protocolUpdateMinPoolCost         = Nothing
+      , protocolUpdatePoolRetireMaxEpoch  = Nothing
+      , protocolUpdateStakePoolTargetNum  = Nothing
+      , protocolUpdatePoolPledgeInfluence = Nothing
+      , protocolUpdateMonetaryExpansion   = Nothing
+      , protocolUpdateTreasuryCut         = Nothing
+      }
+
+makeShelleyUpdateProposal :: ProtocolParametersUpdate
+                          -> [Hash GenesisKey]
+                          -> EpochNo
+                          -> UpdateProposal
+makeShelleyUpdateProposal params genesisKeyHashes epochno =
+    --TODO decide how to handle parameter validation
+    let ppup = toShelleyPParamsUpdate params in
+    UpdateProposal $
+      Shelley.Update
+        (Shelley.ProposedPPUpdates
+           (Map.fromList
+              [ (kh, ppup) | GenesisKeyHash kh <- genesisKeyHashes ]))
+        epochno
+  where
+toShelleyPParamsUpdate :: ProtocolParametersUpdate
+                       -> Shelley.PParamsUpdate
+toShelleyPParamsUpdate
+    ProtocolParametersUpdate {
+      protocolUpdateProtocolVersion
+    , protocolUpdateDecentralization
+    , protocolUpdateExtraPraosEntropy
+    , protocolUpdateMaxBlockHeaderSize
+    , protocolUpdateMaxBlockBodySize
+    , protocolUpdateMaxTxSize
+    , protocolUpdateTxFeeFixed
+    , protocolUpdateTxFeePerByte
+    , protocolUpdateMinUTxOValue
+    , protocolUpdateStakeAddressDeposit
+    , protocolUpdateStakePoolDeposit
+    , protocolUpdateMinPoolCost
+    , protocolUpdatePoolRetireMaxEpoch
+    , protocolUpdateStakePoolTargetNum
+    , protocolUpdatePoolPledgeInfluence
+    , protocolUpdateMonetaryExpansion
+    , protocolUpdateTreasuryCut
+    } =
+    Shelley.PParams {
+      Shelley._minfeeA     = maybeToStrictMaybe protocolUpdateTxFeePerByte
+    , Shelley._minfeeB     = maybeToStrictMaybe protocolUpdateTxFeeFixed
+    , Shelley._maxBBSize   = maybeToStrictMaybe protocolUpdateMaxBlockBodySize
+    , Shelley._maxTxSize   = maybeToStrictMaybe protocolUpdateMaxTxSize
+    , Shelley._maxBHSize   = maybeToStrictMaybe protocolUpdateMaxBlockHeaderSize
+    , Shelley._keyDeposit  = toShelleyLovelace <$>
+                               maybeToStrictMaybe protocolUpdateStakeAddressDeposit
+    , Shelley._poolDeposit = toShelleyLovelace <$>
+                               maybeToStrictMaybe protocolUpdateStakePoolDeposit
+    , Shelley._eMax        = maybeToStrictMaybe protocolUpdatePoolRetireMaxEpoch
+    , Shelley._nOpt        = maybeToStrictMaybe protocolUpdateStakePoolTargetNum
+    , Shelley._a0          = maybeToStrictMaybe protocolUpdatePoolPledgeInfluence
+    , Shelley._rho         = Shelley.truncateUnitInterval . fromRational <$>
+                               maybeToStrictMaybe protocolUpdateMonetaryExpansion
+    , Shelley._tau         = Shelley.truncateUnitInterval . fromRational <$>
+                               maybeToStrictMaybe protocolUpdateTreasuryCut
+    , Shelley._d           = Shelley.truncateUnitInterval . fromRational <$>
+                               maybeToStrictMaybe protocolUpdateDecentralization
+    , Shelley._extraEntropy    = mkNonce <$>
+                                   maybeToStrictMaybe protocolUpdateExtraPraosEntropy
+    , Shelley._protocolVersion = uncurry Shelley.ProtVer <$>
+                                   maybeToStrictMaybe protocolUpdateProtocolVersion
+    , Shelley._minUTxOValue    = toShelleyLovelace <$>
+                                   maybeToStrictMaybe protocolUpdateMinUTxOValue
+    , Shelley._minPoolCost     = toShelleyLovelace <$>
+                                   maybeToStrictMaybe protocolUpdateMinPoolCost
+    }
+  where
+    mkNonce Nothing   = Shelley.NeutralNonce
+    mkNonce (Just bs) = Shelley.Nonce
+                      . Crypto.castHash
+                      . Crypto.hashRaw id
+                      $ bs
 
 -- ----------------------------------------------------------------------------
 -- Operational certificates
@@ -867,36 +2194,27 @@ data OperationalCertificate =
 data OperationalCertificateIssueCounter =
      OperationalCertificateIssueCounter
        !Natural
-       -- TODO: Commenting this out as we're temporarily supporting the old op
-       -- cert issue counter format.
-       -- !(VerificationKey StakePoolKey) -- For consistency checking
+       !(VerificationKey StakePoolKey) -- For consistency checking
   deriving (Eq, Show)
   deriving anyclass SerialiseAsCBOR
 
 instance ToCBOR OperationalCertificate where
     toCBOR (OperationalCertificate ocert vkey) =
-      toCBOR (CBORGroup ocert, vkey)
+      toCBOR (CBOR.CBORGroup ocert, vkey)
 
 instance FromCBOR OperationalCertificate where
     fromCBOR = do
-      (CBORGroup ocert, vkey) <- fromCBOR
+      (CBOR.CBORGroup ocert, vkey) <- fromCBOR
       return (OperationalCertificate ocert vkey)
 
 instance ToCBOR OperationalCertificateIssueCounter where
-    -- TODO: Commenting this out as we're temporarily supporting the old op
-    -- cert issue counter format.
-    -- toCBOR (OperationalCertificateIssueCounter counter vkey) =
-    --   toCBOR (counter, vkey)
-    toCBOR (OperationalCertificateIssueCounter counter) =
-      toCBOR counter
+    toCBOR (OperationalCertificateIssueCounter counter vkey) =
+      toCBOR (counter, vkey)
 
 instance FromCBOR OperationalCertificateIssueCounter where
-    -- TODO: Commenting this out as we're temporarily supporting the old op
-    -- cert issue counter format.
-    -- fromCBOR = do
-    --   (counter, vkey) <- fromCBOR
-    --   return (OperationalCertificateIssueCounter counter vkey)
-    fromCBOR = OperationalCertificateIssueCounter <$> fromCBOR
+    fromCBOR = do
+      (counter, vkey) <- fromCBOR
+      return (OperationalCertificateIssueCounter counter vkey)
 
 instance HasTypeProxy OperationalCertificate where
     data AsType OperationalCertificate = AsOperationalCertificate
@@ -938,20 +2256,13 @@ issueOperationalCertificate :: VerificationKey KesKey
 issueOperationalCertificate (KesVerificationKey kesVKey)
                             (StakePoolSigningKey poolSKey)
                             kesPeriod
-                            -- TODO: Commenting this out as we're temporarily supporting the old op
-                            -- cert issue counter format.
-                            -- (OperationalCertificateIssueCounter counter poolVKey)
-                            (OperationalCertificateIssueCounter counter)
-  -- TODO: Commenting this out as we're temporarily supporting the old op
-  -- cert issue counter format.
-  -- \| poolVKey /= poolVKey'
-  -- = Left (OperationalCertKeyMismatch poolVKey poolVKey')
-  --
-  -- \| otherwise
-  -- = Right (OperationalCertificate ocert poolVKey,
-  --          OperationalCertificateIssueCounter (succ counter) poolVKey)
-    = Right (OperationalCertificate ocert poolVKey',
-             OperationalCertificateIssueCounter (succ counter))
+                            (OperationalCertificateIssueCounter counter poolVKey)
+    | poolVKey /= poolVKey'
+    = Left (OperationalCertKeyMismatch poolVKey poolVKey')
+
+    | otherwise
+    = Right (OperationalCertificate ocert poolVKey,
+            OperationalCertificateIssueCounter (succ counter) poolVKey)
   where
     poolVKey' = getVerificationKey (StakePoolSigningKey poolSKey)
 
@@ -966,6 +2277,234 @@ issueOperationalCertificate (KesVerificationKey kesVKey)
     signature = Crypto.signedDSIGN ()
                   (kesVKey, counter, kesPeriod)
                   poolSKey
+
+
+-- ----------------------------------------------------------------------------
+-- Node IPC protocols
+--
+
+data ByronMode
+data ShelleyMode
+data CardanoMode
+
+data LocalNodeConnectInfo mode block =
+     LocalNodeConnectInfo {
+       localNodeSocketPath    :: FilePath,
+       localNodeNetworkId     :: NetworkId,
+       localNodeConsensusMode :: NodeConsensusMode mode block
+     }
+
+data NodeConsensusMode mode block where
+
+     ByronMode
+       :: Byron.EpochSlots
+       -> SecurityParam
+       -> NodeConsensusMode ByronMode ByronBlock
+
+     ShelleyMode
+       :: NodeConsensusMode ShelleyMode (ShelleyBlock ShelleyCrypto)
+
+     CardanoMode
+       :: Byron.EpochSlots
+       -> SecurityParam
+       -> NodeConsensusMode CardanoMode (CardanoBlock ShelleyCrypto)
+
+
+withNodeProtocolClient
+  :: NodeConsensusMode mode block
+  -> (   (SerialiseNodeToClientConstraints block,
+          TranslateNetworkProtocolVersion block)
+      => ProtocolClient block (BlockProtocol block) -> a)
+  -> a
+withNodeProtocolClient (ByronMode epochSlots securityParam) f =
+    f (mkNodeClientProtocolByron epochSlots securityParam)
+
+withNodeProtocolClient ShelleyMode f =
+    f (mkNodeClientProtocolShelley)
+
+withNodeProtocolClient (CardanoMode epochSlots securityParam) f =
+    f (mkNodeClientProtocolCardano epochSlots securityParam)
+
+
+data LocalNodeClientProtocols block =
+     LocalNodeClientProtocols {
+       localChainSyncClient
+         :: Maybe (ChainSyncClient
+                    block
+                    (Tip block)
+                    IO ())
+
+     , localTxSubmissionClient
+         :: Maybe (LocalTxSubmissionClient
+                    (GenTx block)
+                    (ApplyTxErr block)
+                    IO ())
+
+     , localStateQueryClient
+         :: Maybe (LocalStateQueryClient
+                    block
+                    (Query block)
+                    IO ())
+     }
+
+nullLocalNodeClientProtocols :: LocalNodeClientProtocols block
+nullLocalNodeClientProtocols =
+    LocalNodeClientProtocols {
+      localChainSyncClient    = Nothing,
+      localTxSubmissionClient = Nothing,
+      localStateQueryClient   = Nothing
+    }
+
+
+-- | Establish a connection to a node and execute the given set of protocol
+-- handlers.
+--
+connectToLocalNode :: forall mode block.
+                      LocalNodeConnectInfo mode block
+                   -> LocalNodeClientProtocols block
+                   -> IO ()
+connectToLocalNode LocalNodeConnectInfo {
+                     localNodeSocketPath    = path,
+                     localNodeNetworkId     = network,
+                     localNodeConsensusMode = mode
+                   } clientptcls =
+    withIOManager $ \iomgr ->
+      withNodeProtocolClient mode $ \ptcl ->
+      connectTo
+        (localSnocket iomgr path)
+        NetworkConnectTracers {
+          nctMuxTracer       = nullTracer,
+          nctHandshakeTracer = nullTracer
+        }
+        (foldMapVersions
+            (\v -> versionedNodeToClientProtocols
+                     (nodeToClientProtocolVersion proxy v)
+                     NodeToClientVersionData {
+                       networkMagic = toNetworkMagic network
+                     }
+                     (\_conn _runOrStop -> protocols ptcl v))
+            (supportedNodeToClientVersions proxy))
+        path
+  where
+    proxy :: Proxy block
+    proxy = Proxy
+
+    protocols :: SerialiseNodeToClientConstraints block
+              => ProtocolClient block (BlockProtocol block)
+              -> BlockNodeToClientVersion block
+              -> NodeToClientProtocols InitiatorMode LBS.ByteString IO () Void
+    protocols ptcl clientVersion =
+      let Codecs {
+              cChainSyncCodec
+            , cTxSubmissionCodec
+            , cStateQueryCodec
+            } = clientCodecs (pClientInfoCodecConfig (protocolClientInfo ptcl))
+                             clientVersion
+
+          LocalNodeClientProtocols {
+            localChainSyncClient,
+            localTxSubmissionClient,
+            localStateQueryClient
+          } = clientptcls
+
+       in NodeToClientProtocols {
+            localChainSyncProtocol =
+              InitiatorProtocolOnly $
+                MuxPeer
+                  nullTracer
+                  cChainSyncCodec
+                  (maybe chainSyncPeerNull
+                         chainSyncClientPeer
+                         localChainSyncClient)
+
+          , localTxSubmissionProtocol =
+              InitiatorProtocolOnly $
+                MuxPeer
+                  nullTracer
+                  cTxSubmissionCodec
+                  (maybe localTxSubmissionPeerNull
+                         localTxSubmissionClientPeer
+                         localTxSubmissionClient)
+
+          , localStateQueryProtocol =
+              InitiatorProtocolOnly $
+                MuxPeer
+                  nullTracer
+                  cStateQueryCodec
+                  (maybe localStateQueryPeerNull
+                         localStateQueryClientPeer
+                         localStateQueryClient)
+          }
+
+
+--TODO: change this query to be just a protocol client handler to be used with
+-- connectToLocalNode. This would involve changing connectToLocalNode to be
+-- able to return protocol handler results properly.
+
+-- | Establish a connection to a node and execute a single query using the
+-- local state query protocol.
+--
+queryNodeLocalState :: forall mode block result.
+                       LocalNodeConnectInfo mode block
+                    -> (Point block, Query block result)
+                    -> IO (Either AcquireFailure result)
+queryNodeLocalState connctInfo pointAndQuery = do
+    resultVar <- newEmptyTMVarIO
+    connectToLocalNode
+      connctInfo
+      nullLocalNodeClientProtocols {
+        localStateQueryClient =
+          Just (localStateQuerySingle resultVar pointAndQuery)
+      }
+    atomically (takeTMVar resultVar)
+  where
+    localStateQuerySingle
+      :: TMVar (Either AcquireFailure result)
+      -> (Point block, Query block result)
+      -> LocalStateQueryClient block (Query block) IO ()
+    localStateQuerySingle resultVar (point, query) =
+      LocalStateQueryClient $ pure $
+        SendMsgAcquire point $
+        ClientStAcquiring {
+          recvMsgAcquired =
+            SendMsgQuery query $
+            ClientStQuerying {
+              recvMsgResult = \result -> do
+                --TODO: return the result via the SendMsgDone rather than
+                -- writing into an mvar
+                atomically $ putTMVar resultVar (Right result)
+                pure $ SendMsgRelease $
+                       StateQuery.SendMsgDone ()
+            }
+        , recvMsgFailure = \failure -> do
+            --TODO: return the result via the SendMsgDone rather than
+            -- writing into an mvar
+            atomically $ putTMVar resultVar (Left failure)
+            pure $ StateQuery.SendMsgDone ()
+        }
+
+submitTxToNodeLocal :: forall mode block.
+                       LocalNodeConnectInfo mode block
+                    -> GenTx block
+                    -> IO (SubmitResult (ApplyTxErr block))
+submitTxToNodeLocal connctInfo tx = do
+    resultVar <- newEmptyTMVarIO
+    connectToLocalNode
+      connctInfo
+      nullLocalNodeClientProtocols {
+        localTxSubmissionClient =
+          Just (localTxSubmissionClientSingle resultVar)
+      }
+    atomically (takeTMVar resultVar)
+  where
+    localTxSubmissionClientSingle
+      :: TMVar (SubmitResult (ApplyTxErr block))
+      -> LocalTxSubmissionClient (GenTx block) (ApplyTxErr block) IO ()
+    localTxSubmissionClientSingle resultVar =
+        LocalTxSubmissionClient $
+        pure $ SendMsgSubmitTx tx $ \result -> do
+        atomically $ putTMVar resultVar result
+        pure (TxSubmission.SendMsgDone ())
 
 
 -- ----------------------------------------------------------------------------
@@ -1016,17 +2555,134 @@ deserialiseFromRawBytesHex proxy hex =
 
 
 -- ----------------------------------------------------------------------------
+-- Bech32 Serialisation
+--
+
+class (HasTypeProxy a, SerialiseAsRawBytes a) => SerialiseAsBech32 a where
+
+    -- | The human readable prefix to use when encoding this value to Bech32.
+    --
+    bech32PrefixFor :: a -> Text
+
+    -- | The set of human readable prefixes that can be used for this type.
+    --
+    bech32PrefixesPermitted :: AsType a -> [Text]
+
+
+serialiseToBech32 :: SerialiseAsBech32 a => a -> Text
+serialiseToBech32 a =
+    Bech32.encodeLenient
+      humanReadablePart
+      (Bech32.dataPartFromBytes (serialiseToRawBytes a))
+  where
+    humanReadablePart =
+      case Bech32.humanReadablePartFromText (bech32PrefixFor a) of
+        Right p  -> p
+        Left err -> error $ "serialiseToBech32: invalid prefix "
+                         ++ show (bech32PrefixFor a)
+                         ++ ", " ++ show err
+
+deserialiseFromBech32 :: SerialiseAsBech32 a
+                      => AsType a -> Text -> Either Bech32DecodeError a
+deserialiseFromBech32 asType bech32Str = do
+    (prefix, dataPart) <- Bech32.decodeLenient bech32Str
+                            ?!. Bech32DecodingError
+
+    let actualPrefix      = Bech32.humanReadablePartToText prefix
+        permittedPrefixes = bech32PrefixesPermitted asType
+    guard (actualPrefix `elem` permittedPrefixes)
+      ?! Bech32UnexpectedPrefix actualPrefix permittedPrefixes
+
+    payload <- Bech32.dataPartToBytes dataPart
+                 ?! Bech32DataPartToBytesError (Bech32.dataPartToText dataPart)
+
+    value <- deserialiseFromRawBytes asType payload
+               ?! Bech32DeserialiseFromBytesError payload
+
+    let expectedPrefix = bech32PrefixFor value
+    guard (actualPrefix == expectedPrefix)
+      ?! Bech32WrongPrefix actualPrefix expectedPrefix
+
+    return value
+
+
+-- | Bech32 decoding error.
+data Bech32DecodeError =
+
+       -- | There was an error decoding the string as Bech32.
+       Bech32DecodingError Bech32.DecodingError
+
+       -- | The human-readable prefix in the Bech32-encoded string is not one
+       -- of the ones expected.
+     | Bech32UnexpectedPrefix Text [Text]
+
+       -- | There was an error in extracting a 'ByteString' from the data part of
+       -- the Bech32-encoded string.
+     | Bech32DataPartToBytesError Text
+
+       -- | There was an error in deserialising the bytes into a value of the
+       -- expected type.
+     | Bech32DeserialiseFromBytesError ByteString
+
+       -- | The human-readable prefix in the Bech32-encoded string does not
+       -- correspond to the prefix that should be used for the payload value.
+     | Bech32WrongPrefix Text Text
+
+  deriving (Eq, Show)
+
+instance Error Bech32DecodeError where
+  displayError err = case err of
+    Bech32DecodingError decErr -> show decErr -- TODO
+
+    Bech32UnexpectedPrefix actual permitted ->
+        "Unexpected Bech32 prefix: the actual prefix is " <> show actual
+     <> ", but it was expected to be "
+     <> intercalate " or " (map show permitted)
+
+    Bech32DataPartToBytesError _dataPart ->
+        "There was an error in extracting the bytes from the data part of the \
+        \Bech32-encoded string."
+
+    Bech32DeserialiseFromBytesError _bytes ->
+        "There was an error in deserialising the data part of the \
+        \Bech32-encoded string into a value of the expected type."
+
+    Bech32WrongPrefix actual expected ->
+        "Mismatch in the Bech32 prefix: the actual prefix is " <> show actual
+     <> ", but the prefix for this payload value should be " <> show expected
+
+
+
+-- ----------------------------------------------------------------------------
+-- Address Serialisation
+--
+
+-- | Address serialisation uses different serialisation formats for different
+-- kinds of addresses, so it needs its own class.
+--
+-- In particular, Byron addresses are typically formatted in base 58, while
+-- Shelley addresses (payment and stake) are formatted using Bech32.
+--
+class HasTypeProxy addr => SerialiseAddress addr where
+
+    serialiseAddress :: addr -> Text
+
+    deserialiseAddress :: AsType addr -> Text -> Maybe addr
+    -- TODO: consider adding data AddressDecodeError
+
+
+-- ----------------------------------------------------------------------------
 -- TextEnvelope Serialisation
 --
 
 type TextEnvelope = TextView.TextView
 type TextEnvelopeType = TextView.TextViewType
-type TextEnvelopeDescr = TextView.TextViewTitle
+type TextEnvelopeDescr = TextView.TextViewDescription
 
 class SerialiseAsCBOR a => HasTextEnvelope a where
     textEnvelopeType :: AsType a -> TextEnvelopeType
 
-    textEnvelopeDefaultDescr :: AsType a -> TextEnvelopeDescr
+    textEnvelopeDefaultDescr :: a -> TextEnvelopeDescr
     textEnvelopeDefaultDescr _ = ""
 
 type TextEnvelopeError = TextView.TextViewError
@@ -1049,7 +2705,7 @@ serialiseToTextEnvelope :: forall a. HasTextEnvelope a
 serialiseToTextEnvelope mbDescr a =
     TextView.TextView {
       TextView.tvType    = textEnvelopeType ttoken
-    , TextView.tvTitle   = fromMaybe (textEnvelopeDefaultDescr ttoken) mbDescr
+    , TextView.tvDescription   = fromMaybe (textEnvelopeDefaultDescr a) mbDescr
     , TextView.tvRawCBOR = serialiseToCBOR a
     }
   where
@@ -1064,7 +2720,7 @@ deserialiseFromTextEnvelope :: HasTextEnvelope a
 deserialiseFromTextEnvelope ttoken te = do
     TextView.expectTextViewOfType (textEnvelopeType ttoken) te
     first TextView.TextViewDecodeError $
-      deserialiseFromCBOR ttoken (TextView.tvRawCBOR te)
+      deserialiseFromCBOR ttoken (TextView.tvRawCBOR te) --TODO: You have switched from CBOR to JSON
 
 data FromSomeType (c :: * -> Constraint) b where
      FromSomeType :: c a => AsType a -> (a -> b) -> FromSomeType c b
@@ -1098,8 +2754,8 @@ writeFileTextEnvelope path mbDescr a =
     runExceptT $ do
       handleIOExceptT (FileIOError path) $ BS.writeFile path content
   where
-    content = TextView.renderTextView (serialiseToTextEnvelope mbDescr a)
-
+    content = LBS.toStrict $
+      encodePretty' TextView.textViewJSONConfig (serialiseToTextEnvelope mbDescr a)
 
 readFileTextEnvelope :: HasTextEnvelope a
                      => AsType a
@@ -1109,7 +2765,7 @@ readFileTextEnvelope ttoken path =
     runExceptT $ do
       content <- handleIOExceptT (FileIOError path) $ BS.readFile path
       firstExceptT (FileError path) $ hoistEither $ do
-        te <- TextView.parseTextView content
+        te <- first TextView.TextViewAesonDecodeError $ Aeson.eitherDecodeStrict' content
         deserialiseFromTextEnvelope ttoken te
 
 
@@ -1120,8 +2776,28 @@ readFileTextEnvelopeAnyOf types path =
     runExceptT $ do
       content <- handleIOExceptT (FileIOError path) $ BS.readFile path
       firstExceptT (FileError path) $ hoistEither $ do
-        te <- TextView.parseTextView content
+        te <- first TextView.TextViewAesonDecodeError $ Aeson.eitherDecodeStrict' content
         deserialiseFromTextEnvelopeAnyOf types te
+
+readTextEnvelopeFromFile :: FilePath
+                         -> IO (Either (FileError TextEnvelopeError) TextEnvelope)
+readTextEnvelopeFromFile path =
+  runExceptT $ do
+    bs <- handleIOExceptT (FileIOError path) $
+            BS.readFile path
+    firstExceptT (FileError path . TextView.TextViewAesonDecodeError)
+      . hoistEither $ Aeson.eitherDecodeStrict' bs
+
+readTextEnvelopeOfTypeFromFile
+  :: TextEnvelopeType
+  -> FilePath
+  -> IO (Either (FileError TextEnvelopeError) TextEnvelope)
+readTextEnvelopeOfTypeFromFile expectedType path =
+  runExceptT $ do
+    te <- ExceptT (readTextEnvelopeFromFile path)
+    firstExceptT (FileError path) $ hoistEither $
+      TextView.expectTextViewOfType expectedType te
+    return te
 
 
 -- ----------------------------------------------------------------------------
@@ -1237,6 +2913,7 @@ instance Key ByronKey where
       ByronKeyHash (Byron.hashKey vkey)
 
 newtype instance Hash ByronKey = ByronKeyHash Byron.KeyHash
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash ByronKey) where
     serialiseToRawBytes (ByronKeyHash (Byron.KeyHash vkh)) =
@@ -1251,6 +2928,18 @@ instance HasTextEnvelope (VerificationKey ByronKey) where
 instance HasTextEnvelope (SigningKey ByronKey) where
     textEnvelopeType _ = "SigningKeyByron"
     -- TODO: fix these inconsistent names for the public testnet re-spin
+
+instance CastVerificationKeyRole ByronKey PaymentExtendedKey where
+    castVerificationKey (ByronVerificationKey vk) =
+        PaymentExtendedVerificationKey
+          (Byron.unVerificationKey vk)
+
+instance CastVerificationKeyRole ByronKey PaymentKey where
+    castVerificationKey =
+        (castVerificationKey :: VerificationKey PaymentExtendedKey
+                             -> VerificationKey PaymentKey)
+      . (castVerificationKey :: VerificationKey ByronKey
+                             -> VerificationKey PaymentExtendedKey)
 
 
 --
@@ -1303,6 +2992,7 @@ instance Key PaymentKey where
 
 newtype instance Hash PaymentKey =
     PaymentKeyHash (Shelley.KeyHash Shelley.Payment ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash PaymentKey) where
     serialiseToRawBytes (PaymentKeyHash (Shelley.KeyHash vkh)) =
@@ -1325,6 +3015,121 @@ instance HasTextEnvelope (SigningKey PaymentKey) where
     textEnvelopeType _ = "SigningKeyShelley"
     -- TODO: include the actual crypto algorithm name, to catch changes
     -- TODO: fix these inconsistent names for the public testnet re-spin
+
+
+--
+-- Shelley payment extended ed25519 keys
+--
+
+-- | Shelley-era payment keys using extended ed25519 cryptographic keys.
+--
+-- They can be used for Shelley payment addresses and witnessing
+-- transactions that spend from these addresses.
+--
+-- These extended keys are used by HD wallets. So this type provides
+-- interoperability with HD wallets. The ITN CLI also supported this key type.
+--
+-- The extended verification keys can be converted (via 'castVerificationKey')
+-- to ordinary keys (i.e. 'VerificationKey' 'PaymentKey') but this is /not/ the
+-- case for the signing keys. The signing keys can be used to witness
+-- transactions directly, with verification via their non-extended verification
+-- key ('VerificationKey' 'PaymentKey').
+--
+-- This is a type level tag, used with other interfaces like 'Key'.
+--
+data PaymentExtendedKey
+
+instance HasTypeProxy PaymentExtendedKey where
+    data AsType PaymentExtendedKey = AsPaymentExtendedKey
+    proxyToAsType _ = AsPaymentExtendedKey
+
+instance Key PaymentExtendedKey where
+
+    newtype VerificationKey PaymentExtendedKey =
+        PaymentExtendedVerificationKey Crypto.HD.XPub
+      deriving stock (Eq, Show)
+      deriving anyclass SerialiseAsCBOR
+
+    newtype SigningKey PaymentExtendedKey =
+        PaymentExtendedSigningKey Crypto.HD.XPrv
+      deriving anyclass SerialiseAsCBOR
+
+    deterministicSigningKey :: AsType PaymentExtendedKey
+                            -> Crypto.Seed
+                            -> SigningKey PaymentExtendedKey
+    deterministicSigningKey AsPaymentExtendedKey seed =
+        PaymentExtendedSigningKey
+          (Crypto.HD.generate seedbs BS.empty)
+      where
+       (seedbs, _) = Crypto.getBytesFromSeedT 32 seed
+
+    deterministicSigningKeySeedSize :: AsType PaymentExtendedKey -> Word
+    deterministicSigningKeySeedSize AsPaymentExtendedKey = 32
+
+    getVerificationKey :: SigningKey PaymentExtendedKey
+                       -> VerificationKey PaymentExtendedKey
+    getVerificationKey (PaymentExtendedSigningKey sk) =
+        PaymentExtendedVerificationKey (Crypto.HD.toXPub sk)
+
+    -- | We use the hash of the normal non-extended pub key so that it is
+    -- consistent with the one used in addresses and signatures.
+    --
+    verificationKeyHash :: VerificationKey PaymentExtendedKey
+                        -> Hash PaymentExtendedKey
+    verificationKeyHash (PaymentExtendedVerificationKey vk) =
+        PaymentExtendedKeyHash
+      . Shelley.KeyHash
+      . Crypto.castHash
+      $ Crypto.hashRaw Crypto.HD.xpubPublicKey vk
+
+instance ToCBOR (VerificationKey PaymentExtendedKey) where
+    toCBOR (PaymentExtendedVerificationKey xpub) =
+      toCBOR (Crypto.HD.unXPub xpub)
+
+instance FromCBOR (VerificationKey PaymentExtendedKey) where
+    fromCBOR = do
+      bs <- fromCBOR
+      either fail (return . PaymentExtendedVerificationKey)
+             (Crypto.HD.xpub (bs :: ByteString))
+
+instance ToCBOR (SigningKey PaymentExtendedKey) where
+    toCBOR (PaymentExtendedSigningKey xprv) =
+      toCBOR (Crypto.HD.unXPrv xprv)
+
+instance FromCBOR (SigningKey PaymentExtendedKey) where
+    fromCBOR = do
+      bs <- fromCBOR
+      either fail (return . PaymentExtendedSigningKey)
+             (Crypto.HD.xprv (bs :: ByteString))
+
+newtype instance Hash PaymentExtendedKey =
+    PaymentExtendedKeyHash (Shelley.KeyHash Shelley.Payment ShelleyCrypto)
+  deriving (Eq, Ord, Show)
+
+instance SerialiseAsRawBytes (Hash PaymentExtendedKey) where
+    serialiseToRawBytes (PaymentExtendedKeyHash (Shelley.KeyHash vkh)) =
+      Crypto.getHash vkh
+
+    deserialiseFromRawBytes (AsHash AsPaymentExtendedKey) bs =
+      PaymentExtendedKeyHash . Shelley.KeyHash <$> Crypto.hashFromBytes bs
+
+instance HasTextEnvelope (VerificationKey PaymentExtendedKey) where
+    textEnvelopeType _ = "PaymentVerificationKeyShelley extended ed25519"
+
+instance HasTextEnvelope (SigningKey PaymentExtendedKey) where
+    textEnvelopeType _ = "PaymentSigningKeyShelley extended ed25519"
+
+instance CastVerificationKeyRole PaymentExtendedKey PaymentKey where
+    castVerificationKey (PaymentExtendedVerificationKey vk) =
+        PaymentVerificationKey
+      . Shelley.VKey
+      . fromMaybe impossible
+      . Crypto.rawDeserialiseVerKeyDSIGN
+      . Crypto.HD.xpubPublicKey
+      $ vk
+      where
+        impossible =
+          error "castVerificationKey: byron and shelley key sizes do not match!"
 
 
 --
@@ -1372,6 +3177,7 @@ instance Key StakeKey where
 
 newtype instance Hash StakeKey =
     StakeKeyHash (Shelley.KeyHash Shelley.Staking ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash StakeKey) where
     serialiseToRawBytes (StakeKeyHash (Shelley.KeyHash vkh)) =
@@ -1435,6 +3241,7 @@ instance Key GenesisKey where
 
 newtype instance Hash GenesisKey =
     GenesisKeyHash (Shelley.KeyHash Shelley.Genesis ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash GenesisKey) where
     serialiseToRawBytes (GenesisKeyHash (Shelley.KeyHash vkh)) =
@@ -1498,6 +3305,7 @@ instance Key GenesisDelegateKey where
 
 newtype instance Hash GenesisDelegateKey =
     GenesisDelegateKeyHash (Shelley.KeyHash Shelley.GenesisDelegate ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash GenesisDelegateKey) where
     serialiseToRawBytes (GenesisDelegateKeyHash (Shelley.KeyHash vkh)) =
@@ -1516,10 +3324,11 @@ instance HasTextEnvelope (SigningKey GenesisDelegateKey) where
     -- TODO: use a different type from the stake pool key, since some operations
     -- need a genesis key specifically
 
-instance CastKeyRole GenesisDelegateKey StakePoolKey where
+instance CastVerificationKeyRole GenesisDelegateKey StakePoolKey where
     castVerificationKey (GenesisDelegateVerificationKey (Shelley.VKey vkey)) =
       StakePoolVerificationKey (Shelley.VKey vkey)
 
+instance CastSigningKeyRole GenesisDelegateKey StakePoolKey where
     castSigningKey (GenesisDelegateSigningKey skey) =
       StakePoolSigningKey skey
 
@@ -1570,6 +3379,7 @@ instance Key GenesisUTxOKey where
 
 newtype instance Hash GenesisUTxOKey =
     GenesisUTxOKeyHash (Shelley.KeyHash Shelley.Payment ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash GenesisUTxOKey) where
     serialiseToRawBytes (GenesisUTxOKeyHash (Shelley.KeyHash vkh)) =
@@ -1587,6 +3397,42 @@ instance HasTextEnvelope (SigningKey GenesisUTxOKey) where
     -- TODO: include the actual crypto algorithm name, to catch changes
     -- TODO: use a different type from the stake pool key, since some operations
     -- need a genesis key specifically
+
+instance CastVerificationKeyRole GenesisUTxOKey PaymentKey where
+    castVerificationKey (GenesisUTxOVerificationKey (Shelley.VKey vkey)) =
+      PaymentVerificationKey (Shelley.VKey vkey)
+
+instance CastSigningKeyRole GenesisUTxOKey PaymentKey where
+    castSigningKey (GenesisUTxOSigningKey skey) =
+      PaymentSigningKey skey
+
+-- | Compute the 'TxIn' of the initial UTxO pseudo-transaction corresponding
+-- to the given address in the genesis initial funds.
+--
+-- The Shelley initial UTxO is constructed from the 'sgInitialFunds' which
+-- is not a full UTxO but just a map from addresses to coin values.
+--
+-- This gets turned into a UTxO by making a pseudo-transaction for each address,
+-- with the 0th output being the coin value. So to spend from the initial UTxO
+-- we need this same 'TxIn' to use as an input to the spending transaction.
+--
+genesisUTxOPseudoTxIn :: NetworkId -> Hash GenesisUTxOKey -> TxIn
+genesisUTxOPseudoTxIn nw (GenesisUTxOKeyHash kh) =
+    --TODO: should handle Byron UTxO case too.
+    fromShelleyTxIn (Shelley.initialFundsPseudoTxIn addr)
+  where
+    addr = Shelley.Addr
+             (toShelleyNetwork nw)
+             (Shelley.KeyHashObj kh)
+             Shelley.StakeRefNull
+
+    fromShelleyTxIn  :: Shelley.TxIn ShelleyCrypto -> TxIn
+    fromShelleyTxIn (Shelley.TxIn txid txix) =
+        TxIn (fromShelleyTxId txid) (TxIx (fromIntegral txix))
+
+    fromShelleyTxId :: Shelley.TxId ShelleyCrypto -> TxId
+    fromShelleyTxId (Shelley.TxId h) =
+        TxId (Crypto.castHash h)
 
 
 --
@@ -1634,6 +3480,7 @@ instance Key StakePoolKey where
 
 newtype instance Hash StakePoolKey =
     StakePoolKeyHash (Shelley.KeyHash Shelley.StakePool ShelleyCrypto)
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash StakePoolKey) where
     serialiseToRawBytes (StakePoolKeyHash (Shelley.KeyHash vkh)) =
@@ -1641,6 +3488,9 @@ instance SerialiseAsRawBytes (Hash StakePoolKey) where
 
     deserialiseFromRawBytes (AsHash AsStakePoolKey) bs =
       StakePoolKeyHash . Shelley.KeyHash <$> Crypto.hashFromBytes bs
+
+instance ToJSON (Hash StakePoolKey) where
+    toJSON = toJSON . Text.decodeLatin1 . serialiseToRawBytesHex
 
 instance HasTextEnvelope (VerificationKey StakePoolKey) where
     textEnvelopeType _ = "Node operator verification key"
@@ -1697,6 +3547,7 @@ instance Key KesKey where
 newtype instance Hash KesKey =
     KesKeyHash (Crypto.Hash (Shelley.HASH ShelleyCrypto)
                             (Shelley.VerKeyKES ShelleyCrypto))
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash KesKey) where
     serialiseToRawBytes (KesKeyHash vkh) =
@@ -1760,6 +3611,7 @@ instance Key VrfKey where
 newtype instance Hash VrfKey =
     VrfKeyHash (Crypto.Hash (Shelley.HASH ShelleyCrypto)
                             (Shelley.VerKeyVRF ShelleyCrypto))
+  deriving (Eq, Ord, Show)
 
 instance SerialiseAsRawBytes (Hash VrfKey) where
     serialiseToRawBytes (VrfKeyHash vkh) =
@@ -1781,8 +3633,20 @@ instance HasTextEnvelope (SigningKey VrfKey) where
         proxy = Proxy
 
 -- | Temporary solution for maintaining backward compatibility with the output
--- of 'Cardano.Config.Shelley.VRF.encodeVRFVerificationKey'.
+-- of 'Cardano.Api.Shelley.VRF.encodeVRFVerificationKey'.
 backCompatAlgorithmNameVrf :: Proxy (Shelley.VRF ShelleyCrypto) -> String
 backCompatAlgorithmNameVrf p =
   let algoName = Crypto.algorithmNameVRF p
   in if algoName == "simple" then "SimpleVRF" else algoName
+
+--
+-- Utils
+--
+
+(?!) :: Maybe a -> e -> Either e a
+Nothing ?! e = Left e
+Just x  ?! _ = Right x
+
+(?!.) :: Either e a -> (e -> e') -> Either e' a
+Left  e ?!. f = Left (f e)
+Right x ?!. _ = Right x

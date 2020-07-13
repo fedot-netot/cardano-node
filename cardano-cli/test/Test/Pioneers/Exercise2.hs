@@ -28,32 +28,29 @@ prop_createTransaction =
     -- Generate payment signing key to sign transaction
     execCardanoCLIParser
       allFiles
-      "prop_createTransaction.payment_keypair__gen"
         $ evalCardanoCLIParser [ "shelley","address","key-gen"
                                , "--verification-key-file", paymentVerKey
                                , "--signing-key-file", paymentSignKey
                                ]
 
-    doFilesExist [paymentVerKey, paymentSignKey]
+    assertFilesExist [paymentVerKey, paymentSignKey]
 
     -- Create transaction body
     execCardanoCLIParser
       allFiles
-      "prop_createTransaction.create_tx_body"
         $ evalCardanoCLIParser [ "shelley","transaction", "build-raw"
                                , "--tx-in", "91999ea21177b33ebe6b8690724a0c026d410a11ad7521caa350abdafa5394c3#0"
-                               , "--tx-out", "615dbe1e2117641f8d618034b801a870ca731ce758c3bedd5c7e4429c103149804+100000000"
+                               , "--tx-out", "addr1v9wmu83pzajplrtpsq6tsqdgwr98x888trpmah2u0ezznsge7del3+100000000"
                                , "--fee", "1000000"
                                , "--ttl", "500000"
                                , "--out-file", transactionBodyFile
                                ]
 
-    doFilesExist [transactionBodyFile]
+    assertFilesExist [transactionBodyFile]
 
     -- Sign transaction
     execCardanoCLIParser
       allFiles
-      "prop_createTransaction.sign_tx"
         $ evalCardanoCLIParser [ "shelley","transaction", "sign"
                                , "--tx-body-file", transactionBodyFile
                                , "--signing-key-file", paymentSignKey
@@ -62,7 +59,7 @@ prop_createTransaction =
                                ]
 
 
-    doFilesExist allFiles
+    assertFilesExist allFiles
 
     liftIO $ fileCleanup allFiles
     H.success

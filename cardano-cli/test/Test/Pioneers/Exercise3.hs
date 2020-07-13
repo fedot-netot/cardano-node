@@ -30,30 +30,27 @@ prop_createOperationalCertificate =
     -- Create KES key pair
     execCardanoCLIParser
       allFiles
-      "prop_createOperationalCertificate.KES_keypair_gen"
         $ evalCardanoCLIParser [ "shelley","node","key-gen-KES"
                                , "--verification-key-file", kesVerKey
                                , "--signing-key-file", kesSignKey
                                ]
 
-    doFilesExist [kesSignKey, kesVerKey]
+    assertFilesExist [kesSignKey, kesVerKey]
 
     -- Create cold key pair
     execCardanoCLIParser
       allFiles
-      "prop_createOperationalCertificate.cold_keypair_gen"
         $ evalCardanoCLIParser [ "shelley","node","key-gen"
                                , "--cold-verification-key-file", coldVerKey
                                , "--cold-signing-key-file", coldSignKey
                                , "--operational-certificate-issue-counter", operationalCertCounter
                                ]
 
-    doFilesExist [coldVerKey, coldSignKey, operationalCertCounter]
+    assertFilesExist [coldVerKey, coldSignKey, operationalCertCounter]
 
     -- Create operational certificate
     execCardanoCLIParser
       allFiles
-      "prop_createOperationalCertificate.create_operational_certificate"
         $ evalCardanoCLIParser [ "shelley","node","issue-op-cert"
                                , "--kes-verification-key-file", kesVerKey
                                , "--cold-signing-key-file", coldSignKey
@@ -62,7 +59,7 @@ prop_createOperationalCertificate =
                                , "--out-file", operationalCert
                                ]
 
-    doFilesExist allFiles
+    assertFilesExist allFiles
 
     liftIO $ fileCleanup allFiles
     H.success

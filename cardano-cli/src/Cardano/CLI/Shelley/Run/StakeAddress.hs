@@ -1,70 +1,49 @@
 module Cardano.CLI.Shelley.Run.StakeAddress
   ( ShelleyStakeAddressCmdError
-  , checkKeyPair
   , renderShelleyStakeAddressCmdError
   , runStakeAddressCmd
   ) where
 
 import           Cardano.Prelude
 
-import qualified Data.ByteString.Lazy.Char8 as LBS
+import qualified Data.ByteString.Char8 as BS
+import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (firstExceptT, hoistEither, left, newExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, hoistEither, newExceptT)
 
-import           Cardano.Api
-
-import           Cardano.Api (StakingVerificationKey (..),
-                   readStakingVerificationKey,
-                   shelleyDeregisterStakingAddress, shelleyDelegateStake,
-                   shelleyRegisterStakingAddress, writeCertificate)
-import           Shelley.Spec.Ledger.Keys (VKey(..), hashKey)
-import           Cardano.Config.Shelley.ColdKeys hiding (writeSigningKey)
-import qualified Cardano.Crypto.DSIGN as DSIGN
-
+import           Cardano.Api.TextView (TextViewDescription (..))
+import           Cardano.Api.Typed
 
 import           Cardano.CLI.Helpers
 import           Cardano.CLI.Shelley.Parsers
 
 data ShelleyStakeAddressCmdError
-  = ShelleyStakeReadPoolOperatorKeyError !FilePath !KeyError
-  | ShelleyStakeAddressConvError !ConversionError
+  = ShelleyStakeAddressConvError !ConversionError
   | ShelleyStakeAddressKeyPairError
       !Text
       -- ^ bech32 private key
       !Text
       -- ^ bech32 public key
-  | ShelleyStakeAddressReadFileError !FilePath !Text
-  | ShelleyStakeAddressReadVerKeyError !FilePath !ApiError
-  | ShelleyStakeAddressWriteCertError !FilePath !ApiError
-  | ShelleyStakeAddressWriteSignKeyError !FilePath !ApiError
-  | ShelleyStakeAddressWriteVerKeyError !FilePath !ApiError
+  | ShelleyStakeAddressReadFileError !(FileError TextEnvelopeError)
+  | ShelleyStakeAddressWriteFileError !(FileError ())
   deriving Show
 
 renderShelleyStakeAddressCmdError :: ShelleyStakeAddressCmdError -> Text
 renderShelleyStakeAddressCmdError err =
   case err of
-    ShelleyStakeReadPoolOperatorKeyError fp keyErr ->
-      "Error reading pool operator key at: " <> textShow fp <> " Error: " <> renderKeyError keyErr
     ShelleyStakeAddressConvError convErr -> renderConversionError convErr
-    ShelleyStakeAddressReadFileError fp readErr ->
-      "Error reading file at: " <> textShow fp <> " Error: " <> readErr
-    ShelleyStakeAddressReadVerKeyError fp apiErr ->
-      "Error while reading verification stake key at: " <> textShow fp <> " Error: " <> renderApiError apiErr
-    ShelleyStakeAddressWriteCertError fp apiErr ->
-      "Error while writing delegation certificate at: " <> textShow fp <> " Error: " <> renderApiError apiErr
-    ShelleyStakeAddressWriteSignKeyError fp apiErr ->
-      "Error while writing signing stake key at: " <> textShow fp <> " Error: " <> renderApiError apiErr
-    ShelleyStakeAddressWriteVerKeyError fp apiErr ->
-      "Error while writing verification stake key at: " <> textShow fp <> " Error: " <> renderApiError apiErr
     ShelleyStakeAddressKeyPairError bech32PrivKey bech32PubKey ->
       "Error while deriving the shelley verification key from bech32 private Key: " <> bech32PrivKey <>
       " Corresponding bech32 public key: " <> bech32PubKey
+    ShelleyStakeAddressReadFileError fileErr -> Text.pack (displayError fileErr)
+    ShelleyStakeAddressWriteFileError fileErr -> Text.pack (displayError fileErr)
 
 
 runStakeAddressCmd :: StakeAddressCmd -> ExceptT ShelleyStakeAddressCmdError IO ()
 runStakeAddressCmd (StakeAddressKeyGen vk sk) = runStakeAddressKeyGen vk sk
+runStakeAddressCmd (StakeAddressKeyHash vk mOutputFp) = runStakeAddressKeyHash vk mOutputFp
 runStakeAddressCmd (StakeAddressBuild vk nw mOutputFp) = runStakeAddressBuild vk nw mOutputFp
 runStakeAddressCmd (StakeKeyRegistrationCert stkKeyVerKeyFp outputFp) =
   runStakeKeyRegistrationCert stkKeyVerKeyFp outputFp
@@ -82,32 +61,60 @@ runStakeAddressCmd cmd = liftIO $ putStrLn $ "runStakeAddressCmd: " ++ show cmd
 
 runStakeAddressKeyGen :: VerificationKeyFile -> SigningKeyFile -> ExceptT ShelleyStakeAddressCmdError IO ()
 runStakeAddressKeyGen (VerificationKeyFile vkFp) (SigningKeyFile skFp) = do
-  (vkey, skey) <- liftIO genKeyPair
-  firstExceptT (ShelleyStakeAddressWriteVerKeyError vkFp)
+    skey <- liftIO $ generateSigningKey AsStakeKey
+    let vkey = getVerificationKey skey
+    firstExceptT ShelleyStakeAddressWriteFileError
+      . newExceptT
+      $ writeFileTextEnvelope skFp (Just skeyDesc) skey
+    firstExceptT ShelleyStakeAddressWriteFileError
+      . newExceptT
+      $ writeFileTextEnvelope vkFp (Just vkeyDesc) vkey
+  where
+    skeyDesc, vkeyDesc :: TextViewDescription
+    skeyDesc = TextViewDescription "Stake Signing Key"
+    vkeyDesc = TextViewDescription "Stake Verification Key"
+
+runStakeAddressKeyHash :: VerificationKeyFile -> Maybe OutputFile -> ExceptT ShelleyStakeAddressCmdError IO ()
+runStakeAddressKeyHash (VerificationKeyFile vkeyPath) mOutputFp = do
+  vkey <- firstExceptT ShelleyStakeAddressReadFileError
     . newExceptT
-    $ writeStakingVerificationKey vkFp (StakingVerificationKeyShelley vkey)
-  --TODO: writeSigningKey should really come from Cardano.Config.Shelley.ColdKeys
-  firstExceptT (ShelleyStakeAddressWriteSignKeyError skFp) . newExceptT $ writeSigningKey skFp (SigningKeyShelley skey)
+    $ readFileTextEnvelope (AsVerificationKey AsStakeKey) vkeyPath
 
+  let hexKeyHash = serialiseToRawBytesHex (verificationKeyHash vkey)
 
-runStakeAddressBuild :: VerificationKeyFile -> Network -> Maybe OutputFile
+  case mOutputFp of
+    Just (OutputFile fpath) -> liftIO $ BS.writeFile fpath hexKeyHash
+    Nothing -> liftIO $ BS.putStrLn hexKeyHash
+
+runStakeAddressBuild :: VerificationKeyFile -> NetworkId -> Maybe OutputFile
                      -> ExceptT ShelleyStakeAddressCmdError IO ()
-runStakeAddressBuild (VerificationKeyFile stkVkeyFp) network mOutputFp =
-  firstExceptT (ShelleyStakeAddressReadVerKeyError stkVkeyFp) $ do
-    stkVKey <- ExceptT $ readStakingVerificationKey stkVkeyFp
-    let rwdAddr = AddressShelleyReward (shelleyVerificationKeyRewardAddress network stkVKey)
-        hexAddr = addressToHex rwdAddr
+runStakeAddressBuild (VerificationKeyFile stkVkeyFp) network mOutputFp = do
+    stakeVerKey <- firstExceptT ShelleyStakeAddressReadFileError
+      . newExceptT
+      $ readFileTextEnvelope (AsVerificationKey AsStakeKey) stkVkeyFp
+
+    let stakeCred = StakeCredentialByKey (verificationKeyHash stakeVerKey)
+        stakeAddr = makeStakeAddress network stakeCred
+        stakeAddrText = serialiseAddress stakeAddr
+
     case mOutputFp of
-      Just (OutputFile fpath) -> liftIO . LBS.writeFile fpath $ textToLByteString hexAddr
-      Nothing -> liftIO $ Text.putStrLn hexAddr
+      Just (OutputFile fpath) -> liftIO $ Text.writeFile fpath stakeAddrText
+      Nothing -> liftIO $ Text.putStrLn stakeAddrText
 
 
 runStakeKeyRegistrationCert :: VerificationKeyFile -> OutputFile -> ExceptT ShelleyStakeAddressCmdError IO ()
 runStakeKeyRegistrationCert (VerificationKeyFile vkFp) (OutputFile oFp) = do
-  StakingVerificationKeyShelley stakeVkey <-
-    firstExceptT (ShelleyStakeAddressReadVerKeyError vkFp) . newExceptT $ readStakingVerificationKey vkFp
-  let regCert = shelleyRegisterStakingAddress (hashKey stakeVkey)
-  firstExceptT (ShelleyStakeAddressWriteCertError oFp) . newExceptT $ writeCertificate oFp regCert
+    stakeVerKey <- firstExceptT ShelleyStakeAddressReadFileError
+      . newExceptT
+      $ readFileTextEnvelope (AsVerificationKey AsStakeKey) vkFp
+    let stakeCred = StakeCredentialByKey (verificationKeyHash stakeVerKey)
+        regCert = makeStakeAddressRegistrationCertificate stakeCred
+    firstExceptT ShelleyStakeAddressWriteFileError
+      . newExceptT
+      $ writeFileTextEnvelope oFp (Just regCertDesc) regCert
+  where
+    regCertDesc :: TextViewDescription
+    regCertDesc = TextViewDescription "Stake Address Registration Certificate"
 
 
 runStakeKeyDelegationCert
@@ -118,21 +125,39 @@ runStakeKeyDelegationCert
   -> OutputFile
   -> ExceptT ShelleyStakeAddressCmdError IO ()
 runStakeKeyDelegationCert (VerificationKeyFile stkKey) (VerificationKeyFile poolVKey) (OutputFile outFp) = do
-  StakingVerificationKeyShelley stakeVkey <-
-    firstExceptT (ShelleyStakeAddressReadVerKeyError stkKey) . newExceptT $ readStakingVerificationKey stkKey
-  poolStakeVkey <- firstExceptT (ShelleyStakeReadPoolOperatorKeyError poolVKey) $
-    readVerKey (OperatorKey StakePoolOperatorKey) poolVKey
-  let delegCert = shelleyDelegateStake (hashKey stakeVkey) (hashKey poolStakeVkey)
-  firstExceptT (ShelleyStakeAddressWriteCertError outFp) . newExceptT $ writeCertificate outFp delegCert
+    stakeVkey <- firstExceptT ShelleyStakeAddressReadFileError
+      . newExceptT
+      $ readFileTextEnvelope (AsVerificationKey AsStakeKey) stkKey
+
+    poolStakeVkey <- firstExceptT ShelleyStakeAddressReadFileError
+      . newExceptT
+      $ readFileTextEnvelope (AsVerificationKey AsStakePoolKey) poolVKey
+
+    let stakeCred = StakeCredentialByKey (verificationKeyHash stakeVkey)
+        delegCert = makeStakeAddressDelegationCertificate
+                      stakeCred
+                      (verificationKeyHash poolStakeVkey)
+    firstExceptT ShelleyStakeAddressWriteFileError
+      . newExceptT
+      $ writeFileTextEnvelope outFp (Just delegCertDesc) delegCert
+  where
+    delegCertDesc :: TextViewDescription
+    delegCertDesc = TextViewDescription "Stake Address Delegation Certificate"
 
 
 runStakeKeyDeRegistrationCert :: VerificationKeyFile -> OutputFile -> ExceptT ShelleyStakeAddressCmdError IO ()
 runStakeKeyDeRegistrationCert (VerificationKeyFile vkFp) (OutputFile oFp) = do
-  StakingVerificationKeyShelley stakeVkey <-
-    firstExceptT (ShelleyStakeAddressReadVerKeyError vkFp)  . newExceptT $ readStakingVerificationKey vkFp
-  let deRegCert = shelleyDeregisterStakingAddress (hashKey stakeVkey)
-  firstExceptT (ShelleyStakeAddressWriteCertError oFp) . newExceptT $ writeCertificate oFp deRegCert
-
+    stakeVkey <- firstExceptT ShelleyStakeAddressReadFileError
+      . newExceptT
+      $ readFileTextEnvelope (AsVerificationKey AsStakeKey) vkFp
+    let stakeCred = StakeCredentialByKey (verificationKeyHash stakeVkey)
+        deRegCert = makeStakeAddressDeregistrationCertificate stakeCred
+    firstExceptT ShelleyStakeAddressWriteFileError
+      . newExceptT
+      $ writeFileTextEnvelope oFp (Just deregCertDesc) deRegCert
+  where
+    deregCertDesc :: TextViewDescription
+    deregCertDesc = TextViewDescription "Stake Address Deregistration Certificate"
 
 
 runSingleITNKeyConversion
@@ -141,32 +166,24 @@ runSingleITNKeyConversion
   -> ExceptT ShelleyStakeAddressCmdError IO ()
 runSingleITNKeyConversion (ITNVerificationKeyFile (VerificationKeyFile vk)) mOutFile = do
   bech32publicKey <- firstExceptT ShelleyStakeAddressConvError . newExceptT $ readBech32 vk
-  v@(StakingVerificationKeyShelley (VKey _vkey)) <- hoistEither . first ShelleyStakeAddressConvError $ convertITNverificationKey bech32publicKey
+  vkey <- hoistEither
+    . first ShelleyStakeAddressConvError
+    $ convertITNVerificationKey bech32publicKey
   case mOutFile of
-    Just (OutputFile fp) -> firstExceptT (ShelleyStakeAddressWriteVerKeyError fp) . newExceptT $ writeStakingVerificationKey fp v
-    Nothing -> print v
+    Just (OutputFile fp) ->
+      firstExceptT ShelleyStakeAddressWriteFileError
+        . newExceptT
+        $ writeFileTextEnvelope fp Nothing vkey
+    Nothing -> print vkey
 
 runSingleITNKeyConversion (ITNSigningKeyFile (SigningKeyFile sk)) mOutFile = do
   bech32privateKey <- firstExceptT ShelleyStakeAddressConvError . newExceptT $ readBech32 sk
-  s@(SigningKeyShelley _sKey) <- hoistEither . first ShelleyStakeAddressConvError $ convertITNsigningKey bech32privateKey
+  skey <- hoistEither
+    . first ShelleyStakeAddressConvError
+    $ convertITNSigningKey bech32privateKey
   case mOutFile of
-    Just (OutputFile fp) -> firstExceptT (ShelleyStakeAddressWriteSignKeyError fp) . newExceptT $ writeSigningKey fp s
-    Nothing -> print s
-
--- | Checks that the verification key corresponds to the given signing key
--- This does not need to be in 'IO' however the 'MonadFail' constraint
--- imposed by the ITN conversion functions forces us to use 'IO'
--- in order to report useful errors with 'Either'.
-checkKeyPair
-  :: Text
-  -- ^ Bech32 public key
-  -> Text
-  -- ^ Bech32 private key
-  -> ExceptT ShelleyStakeAddressCmdError IO (SigningKey, StakingVerificationKey)
-checkKeyPair bech32publicKey bech32privateKey = do
-  v@(StakingVerificationKeyShelley (VKey vkey)) <- hoistEither . first ShelleyStakeAddressConvError $ convertITNverificationKey bech32publicKey
-  s@(SigningKeyShelley sKey) <- hoistEither . first ShelleyStakeAddressConvError $ convertITNsigningKey bech32privateKey
-
-  if DSIGN.deriveVerKeyDSIGN sKey == vkey
-  then return (s, v)
-  else left $ ShelleyStakeAddressKeyPairError bech32privateKey bech32publicKey
+    Just (OutputFile fp) ->
+      firstExceptT ShelleyStakeAddressWriteFileError
+        . newExceptT
+        $ writeFileTextEnvelope fp Nothing skey
+    Nothing -> print skey

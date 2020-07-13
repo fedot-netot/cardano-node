@@ -66,20 +66,9 @@ module Cardano.Api
     -- * Slot related
   , EpochNo
 
-    -- * Node local state queries
-  , LocalStateQueryError (..)
-  , QueryFilter (..)
-  , DelegationsAndRewards (..)
-  , renderLocalStateQueryError
-  , queryUTxOFromLocalState
-  , queryLocalLedgerState
-  , queryPParamsFromLocalState
-  , queryStakeDistributionFromLocalState
-  , queryDelegationsAndRewardsFromLocalState
-
-    -- * Node local chain sync related
-  , getLocalTip
-
+    -- * Shelley-specific types
+  , ByronAddress
+  , ShelleyAddress
   , ShelleyCoin
   , ShelleyCredentialStaking
   , ShelleyGenesisVerificationHash
@@ -151,14 +140,9 @@ import           Cardano.Crypto.Random (runSecureRandom)
 import qualified Cardano.Crypto.Signing as Crypto
 
 import           Cardano.Api.Types
-import           Cardano.Api.CBOR as X
 import           Cardano.Api.Convert as X
 import           Cardano.Api.Error as X
-import           Cardano.Api.MetaData as X
-import           Cardano.Api.View as X
 import           Cardano.Api.TxSubmit as X
-import           Cardano.Api.LocalChainSync
-import           Cardano.Api.LocalStateQuery
 
 import qualified Cardano.Chain.Common  as Byron
 import qualified Cardano.Chain.UTxO    as Byron

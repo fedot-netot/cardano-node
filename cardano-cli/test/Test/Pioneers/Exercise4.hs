@@ -26,23 +26,21 @@ prop_createStakeAddressRegistrationCertificate =
     -- Generate stake verification key
     execCardanoCLIParser
       allFiles
-      "prop_buildShelleyPaymentAddress.stake_keypair_gen"
         $ evalCardanoCLIParser [ "shelley","stake-address","key-gen"
                                , "--verification-key-file", verKey
                                , "--signing-key-file", signKey
                                ]
-    doFilesExist [verKey, signKey]
+    assertFilesExist [verKey, signKey]
 
     -- Create stake address registration certificate
     execCardanoCLIParser
       allFiles
-      "prop_buildShelleyPaymentAddress.stake_address_registration_certificate"
         $ evalCardanoCLIParser [ "shelley","stake-address","registration-certificate"
                                , "--stake-verification-key-file", verKey
                                , "--out-file", stakeRegCert
                                ]
 
-    doFilesExist allFiles
+    assertFilesExist allFiles
     liftIO $ fileCleanup allFiles
     H.success
 

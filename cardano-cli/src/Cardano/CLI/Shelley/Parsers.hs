@@ -1,41 +1,58 @@
+
 module Cardano.CLI.Shelley.Parsers
   ( -- * CLI command parser
     parseShelleyCommands
 
     -- * CLI command and flag types
   , module Cardano.CLI.Shelley.Commands
+
+    -- * Field parser and renderers
+  , parseTxIn
+  , renderTxIn
   ) where
 
 import           Prelude (String)
 import           Cardano.Prelude hiding (option)
 
 import           Control.Monad.Fail (fail)
-import qualified Data.ByteString.Char8 as C8
+import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString.Base16 as Base16
+import qualified Data.Char as Char
 import qualified Data.IP as IP
-import qualified Data.Map as Map
 import qualified Data.Set as Set
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as Text
 import           Data.Time.Clock (UTCTime)
 import           Data.Time.Format (defaultTimeLocale, iso8601DateFormat, parseTimeOrError)
 import           Options.Applicative (Parser)
 import qualified Options.Applicative as Opt
+import qualified Data.Attoparsec.ByteString.Char8 as Atto
+
+import           Network.Socket (PortNumber)
+import           Network.URI (URI, parseURI)
+
+import           Cardano.Chain.Slotting (EpochSlots(..))
+import           Cardano.Slotting.Slot (SlotNo(..))
 
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
+import           Ouroboros.Consensus.Cardano (SecurityParam (..))
+
 import qualified Shelley.Spec.Ledger.BaseTypes as Shelley
-import qualified Shelley.Spec.Ledger.Coin as Shelley
 import qualified Shelley.Spec.Ledger.TxData as Shelley
 
-import           Cardano.Api
+import           Cardano.Api.Protocol (Protocol (..))
+import           Cardano.Api.Typed hiding (PoolId)
+
 import           Cardano.Slotting.Slot (EpochNo (..))
 
-import           Cardano.Config.Types (CertificateFile (..), MetaDataFile(..), SigningKeyFile(..),
-                   PoolMetaDataFile(..), UpdateProposalFile (..))
+import           Cardano.Config.Types (CertificateFile (..), SigningKeyFile(..),
+                   UpdateProposalFile (..))
 import           Cardano.Config.Parsers (parseNodeAddress)
-import           Cardano.Config.Shelley.OCert (KESPeriod(..))
 
 import           Cardano.CLI.Shelley.Commands
 
-import           Cardano.Crypto.Hash (Blake2b_256, Hash (..), hashFromBytes, hashFromBytesAsHex)
+import qualified Cardano.Crypto.Hash as Crypto
+                   (Blake2b_256, Hash (..), hashFromBytesAsHex)
 
 --
 -- Shelley CLI command parsers
@@ -111,17 +128,21 @@ pAddressCmd =
       [ Opt.command "key-gen"
           (Opt.info pAddressKeyGen $ Opt.progDesc "Create an address key pair.")
       , Opt.command "key-hash"
-          (Opt.info pAddressKeyHash $ Opt.progDesc "Print the hash of an address key to stdout.")
+          (Opt.info pAddressKeyHash $ Opt.progDesc "Print the hash of an address key.")
       , Opt.command "build"
           (Opt.info pAddressBuild $ Opt.progDesc "Build a Shelley payment address, with optional delegation to a stake address.")
       , Opt.command "build-multisig"
           (Opt.info pAddressBuildMultiSig $ Opt.progDesc "Build a Shelley payment multi-sig address.")
       , Opt.command "info"
           (Opt.info pAddressInfo $ Opt.progDesc "Print information about an address.")
+      , Opt.command "convert"
+          (Opt.info pAddressConvert $ Opt.progDesc "Convert a Byron signing key file.")
       ]
   where
     pAddressKeyGen :: Parser AddressCmd
-    pAddressKeyGen = AddressKeyGen <$> pVerificationKeyFile Output <*> pSigningKeyFile Output
+    pAddressKeyGen = AddressKeyGen <$> pAddressKeyType
+                                   <*> pVerificationKeyFile Output
+                                   <*> pSigningKeyFile Output
 
     pAddressKeyHash :: Parser AddressCmd
     pAddressKeyHash = AddressKeyHash <$> pPaymentVerificationKeyFile <*> pMaybeOutputFile
@@ -131,7 +152,7 @@ pAddressCmd =
       AddressBuild
         <$> pPaymentVerificationKeyFile
         <*> Opt.optional pStakeVerificationKeyFile
-        <*> pNetwork
+        <*> pNetworkId
         <*> pMaybeOutputFile
 
 
@@ -139,8 +160,11 @@ pAddressCmd =
     pAddressBuildMultiSig = pure AddressBuildMultiSig
 
     pAddressInfo :: Parser AddressCmd
-    pAddressInfo = AddressInfo <$> pAddress
+    pAddressInfo = AddressInfo <$> pAddress <*> pMaybeOutputFile
 
+    pAddressConvert :: Parser AddressCmd
+    pAddressConvert = AddressConvertKey <$> pByronKeyFile Input
+                                        <*> pSigningKeyFile Output
 
 pPaymentVerificationKeyFile :: Parser VerificationKeyFile
 pPaymentVerificationKeyFile =
@@ -167,6 +191,8 @@ pStakeAddress =
           (Opt.info pStakeAddressKeyGen $ Opt.progDesc "Create a stake address key pair")
       , Opt.command "build"
           (Opt.info pStakeAddressBuild $ Opt.progDesc "Build a stake address")
+      , Opt.command "key-hash"
+          (Opt.info pStakeAddressKeyHash $ Opt.progDesc "Print the hash of a stake address key.")
       , Opt.command "register"
           (Opt.info pStakeAddressRegister $ Opt.progDesc "Register a stake address")
       , Opt.command "delegate"
@@ -188,9 +214,12 @@ pStakeAddress =
                             <$> pVerificationKeyFile Output
                             <*> pSigningKeyFile Output
 
+    pStakeAddressKeyHash :: Parser StakeAddressCmd
+    pStakeAddressKeyHash = StakeAddressKeyHash <$> pStakeVerificationKeyFile <*> pMaybeOutputFile
+
     pStakeAddressBuild :: Parser StakeAddressCmd
     pStakeAddressBuild = StakeAddressBuild <$> pStakeVerificationKeyFile
-                                           <*> pNetwork
+                                           <*> pNetworkId
                                            <*> pMaybeOutputFile
 
     pStakeAddressRegister :: Parser StakeAddressCmd
@@ -269,15 +298,15 @@ pTransaction =
                                    <*> pTxTTL
                                    <*> pTxFee
                                    <*> many pCertificateFile
-                                   <*> pWithdrawals
-                                   <*> optional pMetaDataFile
+                                   <*> many pWithdrawal
+                                   <*> many pMetaDataFile
                                    <*> optional pUpdateProposalFile
                                    <*> pTxBodyFile Output
 
     pTransactionSign  :: Parser TransactionCmd
     pTransactionSign = TxSign <$> pTxBodyFile Input
                               <*> pSomeSigningKeyFiles
-                              <*> pNetwork
+                              <*> optional pNetworkId
                               <*> pTxFile Output
 
     pTransactionWitness :: Parser TransactionCmd
@@ -290,21 +319,20 @@ pTransaction =
     pTransactionCheck = pure TxCheck
 
     pTransactionSubmit  :: Parser TransactionCmd
-    pTransactionSubmit = TxSubmit <$> pTxSubmitFile
-                                  <*> pNetwork
+    pTransactionSubmit = TxSubmit <$> pProtocol
+                                  <*> pNetworkId
+                                  <*> pTxSubmitFile
 
     pTransactionCalculateMinFee :: Parser TransactionCmd
     pTransactionCalculateMinFee =
       TxCalculateMinFee
-        <$> pTxInCount
-        <*> pTxOutCount
-        <*> pTxTTL
-        <*> pNetwork
-        <*> pSomeSigningKeyFiles
-        <*> many pCertificateFile
-        <*> pWithdrawals
-        <*> pHasMetaData
+        <$> pTxBodyFile Input
+        <*> optional pNetworkId
         <*> pProtocolParamsFile
+        <*> pTxInCount
+        <*> pTxOutCount
+        <*> pTxShelleyWinessCount
+        <*> pTxByronWinessCount
 
     pTransactionId  :: Parser TransactionCmd
     pTransactionId = TxGetTxId <$> pTxBodyFile Input
@@ -324,6 +352,9 @@ pNodeCmd =
       , Opt.command "key-gen-VRF"
           (Opt.info pKeyGenVRF $
              Opt.progDesc "Create a key pair for a node VRF operational key")
+      , Opt.command "key-hash-VRF"
+          (Opt.info pKeyHashVRF $
+             Opt.progDesc "Print hash of a node's operational VRF key.")
       , Opt.command "issue-op-cert"
           (Opt.info pIssueOpCert $
              Opt.progDesc "Issue a node operational certificate")
@@ -342,6 +373,10 @@ pNodeCmd =
     pKeyGenVRF :: Parser NodeCmd
     pKeyGenVRF =
       NodeKeyGenVRF <$> pVerificationKeyFile Output <*> pSigningKeyFile Output
+
+    pKeyHashVRF :: Parser NodeCmd
+    pKeyHashVRF =
+      NodeKeyHashVRF <$> pVerificationKeyFile Input <*> pMaybeOutputFile
 
     pIssueOpCert :: Parser NodeCmd
     pIssueOpCert =
@@ -386,7 +421,7 @@ pPoolCmd =
     pId = PoolGetId <$> pVerificationKeyFile Output
 
     pPoolMetaDataHashSubCmd :: Parser PoolCmd
-    pPoolMetaDataHashSubCmd = PoolMetaDataHash <$> pPoolMetaDataFile
+    pPoolMetaDataHashSubCmd = PoolMetaDataHash <$> pPoolMetaDataFile <*> pMaybeOutputFile
 
 
 pQueryCmd :: Parser QueryCmd
@@ -422,37 +457,41 @@ pQueryCmd =
     pQueryProtocolParameters :: Parser QueryCmd
     pQueryProtocolParameters =
       QueryProtocolParameters
-        <$> pNetwork
+        <$> pProtocol
+        <*> pNetworkId
         <*> pMaybeOutputFile
 
     pQueryTip :: Parser QueryCmd
-    pQueryTip = QueryTip <$> pNetwork <*> pMaybeOutputFile
+    pQueryTip = QueryTip <$> pProtocol <*> pNetworkId <*> pMaybeOutputFile
 
     pQueryUTxO :: Parser QueryCmd
     pQueryUTxO =
       QueryUTxO
-        <$> pQueryFilter
-        <*> pNetwork
+        <$> pProtocol
+        <*> pQueryFilter
+        <*> pNetworkId
         <*> pMaybeOutputFile
 
     pQueryStakeDistribution :: Parser QueryCmd
     pQueryStakeDistribution =
       QueryStakeDistribution
-        <$> pNetwork
+        <$> pProtocol
+        <*> pNetworkId
         <*> pMaybeOutputFile
 
     pQueryStakeAddressInfo :: Parser QueryCmd
     pQueryStakeAddressInfo =
       QueryStakeAddressInfo
-        <$> pFilterByHexEncodedAddress
-        <*> pNetwork
+        <$> pProtocol
+        <*> pFilterByStakeAddress
+        <*> pNetworkId
         <*> pMaybeOutputFile
 
     pQueryVersion :: Parser QueryCmd
     pQueryVersion = QueryVersion <$> parseNodeAddress
 
     pQueryLedgerState :: Parser QueryCmd
-    pQueryLedgerState = QueryLedgerState <$> pNetwork <*> pMaybeOutputFile
+    pQueryLedgerState = QueryLedgerState <$> pProtocol <*> pNetworkId <*> pMaybeOutputFile
 
     pQueryStatus :: Parser QueryCmd
     pQueryStatus = QueryStatus <$> parseNodeAddress
@@ -508,7 +547,7 @@ pGovernanceCmd =
                         <$> pOutputFile
                         <*> pEpochNoUpdateProp
                         <*> some pGenesisVerificationKeyFile
-                        <*> pShelleyPParamsUpdate
+                        <*> pShelleyProtocolParametersUpdate
 
     pProtocolUpdate :: Parser GovernanceCmd
     pProtocolUpdate = GovernanceProtocolUpdate <$> pColdSigningKeyFile
@@ -524,10 +563,9 @@ pGovernanceCmd =
               <> Opt.internal
               )
 
-pRewardAmt :: Parser ShelleyCoin
+pRewardAmt :: Parser Lovelace
 pRewardAmt =
-  Shelley.Coin <$>
-    Opt.option Opt.auto
+    Opt.option (readerFromAttoParser parseLovelace)
       (  Opt.long "reward"
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The reward for the relevant reward account."
@@ -605,11 +643,11 @@ pGenesisCmd =
 
     pGenesisAddr :: Parser GenesisCmd
     pGenesisAddr =
-      GenesisAddr <$> pVerificationKeyFile Input <*> pNetwork <*> pMaybeOutputFile
+      GenesisAddr <$> pVerificationKeyFile Input <*> pNetworkId <*> pMaybeOutputFile
 
     pGenesisTxIn :: Parser GenesisCmd
     pGenesisTxIn =
-      GenesisTxIn <$> pVerificationKeyFile Input <*> pNetwork <*> pMaybeOutputFile
+      GenesisTxIn <$> pVerificationKeyFile Input <*> pNetworkId <*> pMaybeOutputFile
 
     pGenesisCreate :: Parser GenesisCmd
     pGenesisCreate =
@@ -618,7 +656,7 @@ pGenesisCmd =
                     <*> pGenesisNumUTxOKeys
                     <*> pMaybeSystemStart
                     <*> pInitialSupply
-                    <*> pNetwork
+                    <*> pNetworkId
 
     pGenesisDir :: Parser GenesisDir
     pGenesisDir =
@@ -681,6 +719,26 @@ data FileDirection
   | Output
   deriving (Eq, Show)
 
+pAddressKeyType :: Parser AddressKeyType
+pAddressKeyType =
+    Opt.flag' AddressKeyShelley
+      (  Opt.long "normal-key"
+      <> Opt.help "Use a normal Shelley-era key (default)."
+      )
+  <|>
+    Opt.flag' AddressKeyShelleyExtended
+      (  Opt.long "extended-key"
+      <> Opt.help "Use an extended ed25519 Shelley-era key."
+      )
+  <|>
+    Opt.flag' AddressKeyByron
+      (  Opt.long "byron-key"
+      <> Opt.help "Use a Byron-era key."
+      )
+  <|>
+    pure AddressKeyShelley
+
+
 pProtocolParamsFile :: Parser ProtocolParamsFile
 pProtocolParamsFile =
   ProtocolParamsFile <$>
@@ -721,41 +779,42 @@ pPoolMetaDataFile =
 
 pMetaDataFile :: Parser MetaDataFile
 pMetaDataFile =
-  MetaDataFile <$>
-    Opt.strOption
-      (  Opt.long "metadata-file"
-      <> Opt.metavar "FILE"
-      <> Opt.help "Filepath of the metadata."
-      <> Opt.completer (Opt.bashCompleter "file")
-      )
-
-pWithdrawals :: Parser Withdrawals
-pWithdrawals =
-    WithdrawalsShelley . Shelley.Wdrl . Map.fromList <$> many pWithdrawal
-  where
-    pWithdrawal =
-      bimap getShelleyRewardAccount toShelleyLovelace <$>
-        Opt.option (Opt.eitherReader (parseWithdrawal . Text.pack))
-          (  Opt.long "withdrawal"
-          <> Opt.metavar "WITHDRAWAL"
-          <> Opt.help "The reward withdrawal as StakeAddress+Lovelace where \
-                      \StakeAddress is the hex encoded stake address \
-                      \followed by the amount in Lovelace."
+      MetaDataFileJSON <$>
+        ( Opt.strOption
+            (  Opt.long "metadata-json-file"
+            <> Opt.metavar "FILE"
+            <> Opt.help "Filepath of the metadata file, in JSON format."
+            <> Opt.completer (Opt.bashCompleter "file")
+            )
+        <|>
+          Opt.strOption
+            (  Opt.long "metadata-file" -- backward compat name
+            <> Opt.internal
+            )
+        )
+  <|>
+      MetaDataFileCBOR <$>
+        Opt.strOption
+          (  Opt.long "metadata-cbor-file"
+          <> Opt.metavar "FILE"
+          <> Opt.help "Filepath of the metadata, in raw CBOR format."
+          <> Opt.completer (Opt.bashCompleter "file")
           )
 
-    getShelleyRewardAccount :: Address -> ShelleyRewardAccount
-    getShelleyRewardAccount (AddressShelleyReward rwdAcnt) = rwdAcnt
-    getShelleyRewardAccount _ =
-      panic "pWithdrawals.getShelleyRewardAccount: Impossible: \
-            \parseWithdrawal parsed an Address that is not an \
-            \AddressShelleyReward"
+pWithdrawal :: Parser (StakeAddress, Lovelace)
+pWithdrawal =
+    Opt.option (readerFromAttoParser parseWithdrawal)
+      (  Opt.long "withdrawal"
+      <> Opt.metavar "WITHDRAWAL"
+      <> Opt.help "The reward withdrawal as StakeAddress+Lovelace where \
+                  \StakeAddress is the Bech32-encoded stake address \
+                  \followed by the amount in Lovelace."
+      )
+  where
+    parseWithdrawal :: Atto.Parser (StakeAddress, Lovelace)
+    parseWithdrawal =
+      (,) <$> parseStakeAddress <* Atto.char '+' <*> parseLovelace
 
-pHasMetaData :: Parser HasMetaData
-pHasMetaData =
-  Opt.flag HasNoMetaData HasMetaData
-    (  Opt.long "has-metadata"
-    <> Opt.help "Whether the transaction will have metadata."
-    )
 
 pUpdateProposalFile :: Parser UpdateProposalFile
 pUpdateProposalFile =
@@ -818,6 +877,16 @@ pSigningKeyFile fdir =
       (  Opt.long "signing-key-file"
       <> Opt.metavar "FILE"
       <> Opt.help (show fdir ++ " filepath of the signing key.")
+      <> Opt.completer (Opt.bashCompleter "file")
+      )
+
+pByronKeyFile :: FileDirection -> Parser SigningKeyFile
+pByronKeyFile fdir =
+  SigningKeyFile <$>
+    Opt.strOption
+      (  Opt.long "byron-signing-key-file"
+      <> Opt.metavar "FILE"
+      <> Opt.help (show fdir ++ " filepath of the Byron format signing key.")
       <> Opt.completer (Opt.bashCompleter "file")
       )
 
@@ -995,16 +1064,16 @@ pITNVerificationKeyFile =
       <> Opt.completer (Opt.bashCompleter "file")
       )
 
-pNetwork :: Parser Network
-pNetwork =
+pNetworkId :: Parser NetworkId
+pNetworkId =
   pMainnet <|> fmap Testnet pTestnetMagic
-
-pMainnet :: Parser Network
-pMainnet =
-  Opt.flag' Mainnet
-    (  Opt.long "mainnet"
-    <> Opt.help "Use the mainnet magic id."
-    )
+ where
+   pMainnet :: Parser NetworkId
+   pMainnet =
+    Opt.flag' Mainnet
+      (  Opt.long "mainnet"
+      <> Opt.help "Use the mainnet magic id."
+      )
 
 pTestnetMagic :: Parser NetworkMagic
 pTestnetMagic =
@@ -1026,19 +1095,47 @@ pTxSubmitFile =
 
 pTxIn :: Parser TxIn
 pTxIn =
-  Opt.option (Opt.eitherReader (parseTxIn . Text.pack))
+  Opt.option (readerFromAttoParser parseTxIn)
     (  Opt.long "tx-in"
     <> Opt.metavar "TX-IN"
     <> Opt.help "The input transaction as TxId#TxIx where TxId is the transaction hash and TxIx is the index."
     )
 
-pTxOut :: Parser TxOut
+parseTxIn :: Atto.Parser TxIn
+parseTxIn = TxIn <$> parseTxId <*> (Atto.char '#' *> parseTxIx)
+
+renderTxIn :: TxIn -> Text
+renderTxIn (TxIn txid (TxIx txix)) =
+  mconcat
+    [ Text.decodeUtf8 (serialiseToRawBytesHex txid)
+    , "#"
+    , Text.pack (show txix)
+    ]
+
+parseTxId :: Atto.Parser TxId
+parseTxId = do
+  bstr <- Atto.takeWhile1 Char.isHexDigit
+  case deserialiseFromRawBytesHex AsTxId bstr of
+    Just addr -> return addr
+    Nothing -> fail $ "Incorrect transaction id format:: " ++ show bstr
+
+parseTxIx :: Atto.Parser TxIx
+parseTxIx = toEnum <$> Atto.decimal
+
+
+pTxOut :: Parser (TxOut Shelley)
 pTxOut =
-  Opt.option (Opt.eitherReader (parseTxOut . Text.pack))
+  Opt.option (readerFromAttoParser parseTxOut)
     (  Opt.long "tx-out"
     <> Opt.metavar "TX-OUT"
-    <> Opt.help "The ouput transaction as TxOut+Lovelace where TxOut is the hex encoded address followed by the amount in Lovelace."
+    <> Opt.help "The ouput transaction as Address+Lovelace where Address is \
+                \the Bech32-encoded address followed by the amount in \
+                \Lovelace."
     )
+  where
+    parseTxOut :: Atto.Parser (TxOut Shelley)
+    parseTxOut =
+      TxOut <$> parseAddress <* Atto.char '+' <*> parseLovelace
 
 pTxTTL :: Parser SlotNo
 pTxTTL =
@@ -1051,7 +1148,7 @@ pTxTTL =
 
 pTxFee :: Parser Lovelace
 pTxFee =
-  Lovelace <$>
+  Lovelace . (fromIntegral :: Natural -> Integer) <$>
     Opt.option Opt.auto
       (  Opt.long "fee"
       <> Opt.metavar "LOVELACE"
@@ -1119,19 +1216,46 @@ pTxOutCount =
       <> Opt.help "The number of transaction outputs."
       )
 
+pTxShelleyWinessCount :: Parser TxShelleyWinessCount
+pTxShelleyWinessCount =
+  TxShelleyWinessCount <$>
+    Opt.option Opt.auto
+      (  Opt.long "witness-count"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "The number of Shelley key witnesses."
+      )
+
+pTxByronWinessCount :: Parser TxByronWinessCount
+pTxByronWinessCount =
+  TxByronWinessCount <$>
+    Opt.option Opt.auto
+      (  Opt.long "byron-witness-count"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "The number of Byron key witnesses."
+      )
+
 pQueryFilter :: Parser QueryFilter
 pQueryFilter = pAddresses <|> pure NoFilter
   where
     pAddresses :: Parser QueryFilter
-    pAddresses = FilterByAddress . Set.fromList <$> some pFilterByHexEncodedAddress
+    pAddresses = FilterByAddress . Set.fromList <$>
+                   some pFilterByAddress
 
-pFilterByHexEncodedAddress :: Parser Address
-pFilterByHexEncodedAddress =
-  Opt.option (Opt.eitherReader (first show . addressFromHex . Text.pack))
-    (  Opt.long "address"
-    <> Opt.metavar "ADDRESS"
-    <> Opt.help "Filter by Cardano address(es) (hex-encoded)."
-    )
+pFilterByAddress :: Parser (Address Shelley)
+pFilterByAddress =
+    Opt.option (readerFromAttoParser parseAddress)
+      (  Opt.long "address"
+      <> Opt.metavar "ADDRESS"
+      <> Opt.help "Filter by Cardano address(es) (Bech32-encoded)."
+      )
+
+pFilterByStakeAddress :: Parser StakeAddress
+pFilterByStakeAddress =
+    Opt.option (readerFromAttoParser parseStakeAddress)
+      (  Opt.long "address"
+      <> Opt.metavar "ADDRESS"
+      <> Opt.help "Filter by Cardano stake address (Bech32-encoded)."
+      )
 
 pAddress :: Parser Text
 pAddress =
@@ -1220,45 +1344,39 @@ pPoolOwner =
     )
 
 
-pPoolPledge :: Parser ShelleyCoin
+pPoolPledge :: Parser Lovelace
 pPoolPledge =
-  Shelley.Coin <$>
-    Opt.option Opt.auto
+    Opt.option (readerFromAttoParser parseLovelace)
       (  Opt.long "pool-pledge"
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The stake pool's pledge."
       )
 
 
-pPoolCost :: Parser ShelleyCoin
+pPoolCost :: Parser Lovelace
 pPoolCost =
-  Shelley.Coin <$>
-    Opt.option Opt.auto
+    Opt.option (readerFromAttoParser parseLovelace)
       (  Opt.long "pool-cost"
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The stake pool's cost."
       )
 
-pPoolMargin :: Parser ShelleyStakePoolMargin
+pPoolMargin :: Parser Rational
 pPoolMargin =
-  (\dbl -> maybeOrFail . Shelley.mkUnitInterval $ realToFrac (dbl :: Double)) <$>
-    Opt.option Opt.auto
+    Opt.option readRationalUnitInterval
       (  Opt.long "pool-margin"
       <> Opt.metavar "DOUBLE"
       <> Opt.help "The stake pool's margin."
       )
-  where
-    maybeOrFail (Just mgn) = mgn
-    maybeOrFail Nothing = panic "Pool margin outside of [0,1] range."
 
-pPoolRelay :: Parser ShelleyStakePoolRelay
+pPoolRelay :: Parser StakePoolRelay
 pPoolRelay = pSingleHostAddress <|> pSingleHostName <|> pMultiHostName
 
-pMultiHostName :: Parser ShelleyStakePoolRelay
+pMultiHostName :: Parser StakePoolRelay
 pMultiHostName =
-  Shelley.MultiHostName <$> pDNSName
+  StakePoolRelayDnsSrvRecord <$> pDNSName
  where
-  pDNSName :: Parser Shelley.DnsName
+  pDNSName :: Parser ByteString
   pDNSName = Opt.option (Opt.eitherReader eDNSName)
                (  Opt.long "multi-host-pool-relay"
                <> Opt.metavar "STRING"
@@ -1266,11 +1384,11 @@ pMultiHostName =
                             \an SRV DNS record"
                )
 
-pSingleHostName :: Parser ShelleyStakePoolRelay
+pSingleHostName :: Parser StakePoolRelay
 pSingleHostName =
-  Shelley.SingleHostName <$> (Shelley.maybeToStrictMaybe <$> optional pPort) <*> pDNSName
+  StakePoolRelayDnsARecord <$> pDNSName <*> optional pPort
  where
-  pDNSName :: Parser Shelley.DnsName
+  pDNSName :: Parser ByteString
   pDNSName = Opt.option (Opt.eitherReader eDNSName)
                (  Opt.long "single-host-pool-relay"
                <> Opt.metavar "STRING"
@@ -1278,28 +1396,32 @@ pSingleHostName =
                             \ A or AAAA DNS record"
                )
 
-eDNSName :: String -> Either String Shelley.DnsName
-eDNSName str = maybe (Left "DNS name is more than 64 bytes") Right (Shelley.textToDns $ toS str)
+eDNSName :: String -> Either String ByteString
+eDNSName str =
+  -- We're using 'Shelley.textToDns' to validate the string.
+  case Shelley.textToDns (toS str) of
+    Nothing -> Left "DNS name is more than 64 bytes"
+    Just dnsName -> Right . Text.encodeUtf8 . Shelley.dnsToText $ dnsName
 
-pSingleHostAddress :: Parser ShelleyStakePoolRelay
+pSingleHostAddress :: Parser StakePoolRelay
 pSingleHostAddress =
   liftA3
-    (\port ip4 ip6 -> singleHostAddress port ip4 ip6)
-    pPort
+    (\ip4 ip6 port -> singleHostAddress ip4 ip6 port)
     (optional pIpV4)
     (optional pIpV6)
+    pPort
  where
-  singleHostAddress :: Shelley.Port -> Maybe IP.IPv4 -> Maybe IP.IPv6 -> ShelleyStakePoolRelay
-  singleHostAddress port ipv4 ipv6 =
+  singleHostAddress :: Maybe IP.IPv4 -> Maybe IP.IPv6 -> PortNumber -> StakePoolRelay
+  singleHostAddress ipv4 ipv6 port =
     case (ipv4, ipv6) of
       (Nothing, Nothing) ->
         panic $ "Please enter either an IPv4 or IPv6 address for the pool relay"
       (Just i4, Nothing) ->
-        Shelley.SingleHostAddr (Shelley.SJust port) (Shelley.SJust i4) Shelley.SNothing
+        StakePoolRelayIp (Just i4) Nothing (Just port)
       (Nothing, Just i6) ->
-        Shelley.SingleHostAddr (Shelley.SJust port) Shelley.SNothing (Shelley.SJust i6)
+        StakePoolRelayIp Nothing (Just i6) (Just port)
       (Just i4, Just i6) ->
-        Shelley.SingleHostAddr (Shelley.SJust port) (Shelley.SJust i4) (Shelley.SJust i6)
+        StakePoolRelayIp (Just i4) (Just i6) (Just port)
 
 
 
@@ -1317,31 +1439,30 @@ pIpV6 = Opt.option (Opt.maybeReader readMaybe :: Opt.ReadM IP.IPv6)
            <> Opt.help "The stake pool relay's IPv6 address"
            )
 
-pPort :: Parser Shelley.Port
+pPort :: Parser PortNumber
 pPort = Opt.option (fromInteger <$> Opt.eitherReader readEither)
            (  Opt.long "pool-relay-port"
            <> Opt.metavar "INT"
            <> Opt.help "The stake pool relay's port"
            )
 
-pPoolMetaData :: Parser (Maybe ShelleyStakePoolMetaData)
-pPoolMetaData =
+pStakePoolMetadataReference :: Parser (Maybe StakePoolMetadataReference)
+pStakePoolMetadataReference =
   optional $
-    Shelley.PoolMetaData
-      <$> pPoolMetaDataUrl
-      <*> pPoolMetaDataHash
+    StakePoolMetadataReference
+      <$> pStakePoolMetadataUrl
+      <*> pStakePoolMetadataHash
 
-pPoolMetaDataUrl :: Parser Shelley.Url
-pPoolMetaDataUrl =
-  Opt.option
-    (Opt.maybeReader (Shelley.textToUrl . Text.pack))
-        (  Opt.long "metadata-url"
-        <> Opt.metavar "URL"
-        <> Opt.help "Pool metadata URL (maximum length of 64 characters)."
-        )
+pStakePoolMetadataUrl :: Parser URI
+pStakePoolMetadataUrl =
+  Opt.option (readURIOfMaxLength 64)
+    (  Opt.long "metadata-url"
+    <> Opt.metavar "URL"
+    <> Opt.help "Pool metadata URL (maximum length of 64 characters)."
+    )
 
-pPoolMetaDataHash :: Parser ByteString
-pPoolMetaDataHash =
+pStakePoolMetadataHash :: Parser (Hash StakePoolMetadata)
+pStakePoolMetadataHash =
     Opt.option
       (Opt.maybeReader metadataHash)
         (  Opt.long "metadata-hash"
@@ -1349,11 +1470,11 @@ pPoolMetaDataHash =
         <> Opt.help "Pool metadata hash."
         )
   where
-    getHashFromHexString :: String -> Maybe (Hash Blake2b_256 ByteString)
-    getHashFromHexString = hashFromBytesAsHex . C8.pack
+    getHashFromHexString :: String -> Maybe (Crypto.Hash Crypto.Blake2b_256 ByteString)
+    getHashFromHexString = Crypto.hashFromBytesAsHex . BSC.pack
 
-    metadataHash :: String -> Maybe ByteString
-    metadataHash str = getHash <$> getHashFromHexString str
+    metadataHash :: String -> Maybe (Hash StakePoolMetadata)
+    metadataHash str = StakePoolMetadataHash <$> getHashFromHexString str
 
 pStakePoolRegistrationCert :: Parser PoolCmd
 pStakePoolRegistrationCert =
@@ -1366,8 +1487,8 @@ pStakePoolRegistrationCert =
   <*> pRewardAcctVerificationKeyFile
   <*> some pPoolOwner
   <*> many pPoolRelay
-  <*> pPoolMetaData
-  <*> pNetwork
+  <*> pStakePoolMetadataReference
+  <*> pNetworkId
   <*> pOutputFile
 
 pStakePoolRetirementCert :: Parser PoolCmd
@@ -1378,217 +1499,309 @@ pStakePoolRetirementCert =
     <*> pOutputFile
 
 
-pShelleyPParamsUpdate :: Parser ShelleyPParamsUpdate
-pShelleyPParamsUpdate =
-  PParams
-    <$> (maybeToStrictMaybe <$> pMinFeeLinearFactor)
-    <*> (maybeToStrictMaybe <$> pMinFeeConstantFactor)
-    <*> (maybeToStrictMaybe <$> pMaxBodySize)
-    <*> (maybeToStrictMaybe <$> pMaxTransactionSize)
-    <*> (maybeToStrictMaybe <$> pMaxBlockHeaderSize)
-    <*> (maybeToStrictMaybe <$> pKeyRegistDeposit)
-    <*> (maybeToStrictMaybe <$> pPoolDeposit)
-    <*> (maybeToStrictMaybe <$> pEpochBoundRetirement)
-    <*> (maybeToStrictMaybe <$> pNumberOfPools)
-    <*> (maybeToStrictMaybe <$> pPoolInfluence)
-    <*> (maybeToStrictMaybe <$> pMonetaryExpansion)
-    <*> (maybeToStrictMaybe <$> pTreasuryExpansion)
-    <*> (maybeToStrictMaybe <$> pDecentralParam)
-    <*> (maybeToStrictMaybe <$> pExtraEntropy)
-    <*> (maybeToStrictMaybe <$> pProtocolVersion)
-    <*> (maybeToStrictMaybe <$> pMinUTxOValue)
-    <*> (maybeToStrictMaybe <$> pMinPoolCost)
+pShelleyProtocolParametersUpdate :: Parser ProtocolParametersUpdate
+pShelleyProtocolParametersUpdate =
+  ProtocolParametersUpdate
+    <$> optional pProtocolVersion
+    <*> optional pDecentralParam
+    <*> optional pExtraEntropy
+    <*> optional pMaxBlockHeaderSize
+    <*> optional pMaxBodySize
+    <*> optional pMaxTransactionSize
+    <*> optional pMinFeeConstantFactor
+    <*> optional pMinFeeLinearFactor
+    <*> optional pMinUTxOValue
+    <*> optional pKeyRegistDeposit
+    <*> optional pPoolDeposit
+    <*> optional pMinPoolCost
+    <*> optional pEpochBoundRetirement
+    <*> optional pNumberOfPools
+    <*> optional pPoolInfluence
+    <*> optional pMonetaryExpansion
+    <*> optional pTreasuryExpansion
 
-pMinFeeLinearFactor :: Parser (Maybe Natural)
+pMinFeeLinearFactor :: Parser Natural
 pMinFeeLinearFactor =
-  optional
-    $ Opt.option Opt.auto
-        (  Opt.long "min-fee-linear"
-        <> Opt.metavar "NATURAL"
-        <> Opt.help "The linear factor for the minimum fee calculation."
-        )
+    Opt.option Opt.auto
+      (  Opt.long "min-fee-linear"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "The linear factor for the minimum fee calculation."
+      )
 
-pMinFeeConstantFactor :: Parser (Maybe Natural)
+pMinFeeConstantFactor :: Parser Natural
 pMinFeeConstantFactor =
-  optional
-  $ Opt.option Opt.auto
+    Opt.option Opt.auto
       (  Opt.long "min-fee-constant"
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The constant factor for the minimum fee calculation."
       )
 
-pMinUTxOValue :: Parser (Maybe ShelleyCoin)
+pMinUTxOValue :: Parser Lovelace
 pMinUTxOValue =
-  Opt.optional $
-    Shelley.Coin <$>
-    Opt.option Opt.auto
+    Opt.option (readerFromAttoParser parseLovelace)
       (  Opt.long "min-utxo-value"
       <> Opt.metavar "NATURAL"
       <> Opt.help "The minimum allowed UTxO value."
       )
 
-pMinPoolCost :: Parser (Maybe ShelleyCoin)
+pMinPoolCost :: Parser Lovelace
 pMinPoolCost =
-  Opt.optional $
-    Shelley.Coin <$>
-    Opt.option Opt.auto
+    Opt.option (readerFromAttoParser parseLovelace)
       (  Opt.long "min-pool-cost"
       <> Opt.metavar "NATURAL"
       <> Opt.help "The minimum allowed cost parameter for stake pools."
       )
 
-pMaxBodySize :: Parser (Maybe Natural)
+pMaxBodySize :: Parser Natural
 pMaxBodySize =
-  optional
-    $ Opt.option Opt.auto
-        (  Opt.long "max-block-body-size"
-        <> Opt.metavar "NATURAL"
-        <> Opt.help "Maximal block body size."
-        )
+    Opt.option Opt.auto
+      (  Opt.long "max-block-body-size"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Maximal block body size."
+      )
 
-pMaxTransactionSize :: Parser (Maybe Natural)
+pMaxTransactionSize :: Parser Natural
 pMaxTransactionSize =
-  optional
-    $ Opt.option Opt.auto
-        (  Opt.long "max-tx-size"
-        <> Opt.metavar "NATURAL"
-        <> Opt.help "Maximum transaction size."
-        )
+    Opt.option Opt.auto
+      (  Opt.long "max-tx-size"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Maximum transaction size."
+      )
 
-pMaxBlockHeaderSize :: Parser (Maybe Natural)
+pMaxBlockHeaderSize :: Parser Natural
 pMaxBlockHeaderSize =
-  optional
-    $ Opt.option Opt.auto
-        (  Opt.long "max-block-header-size"
-        <> Opt.metavar "NATURAL"
-        <> Opt.help "Maximum block header size."
-        )
+    Opt.option Opt.auto
+      (  Opt.long "max-block-header-size"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Maximum block header size."
+      )
 
-pKeyRegistDeposit :: Parser (Maybe ShelleyCoin)
+pKeyRegistDeposit :: Parser Lovelace
 pKeyRegistDeposit =
-  optional
-    $ Shelley.Coin
-        <$> Opt.option Opt.auto
-              (  Opt.long "key-reg-deposit-amt"
-              <> Opt.metavar "NATURAL"
-              <> Opt.help "Key registration deposit amount."
-              )
+    Opt.option (readerFromAttoParser parseLovelace)
+      (  Opt.long "key-reg-deposit-amt"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Key registration deposit amount."
+      )
 
-
-pPoolDeposit :: Parser (Maybe ShelleyCoin)
+pPoolDeposit :: Parser Lovelace
 pPoolDeposit =
-  optional $
-    Shelley.Coin
-      <$> Opt.option Opt.auto
-            (  Opt.long "pool-reg-deposit"
-            <> Opt.metavar "NATURAL"
-            <> Opt.help "The amount of a pool registration deposit."
-            )
+    Opt.option (readerFromAttoParser parseLovelace)
+      (  Opt.long "pool-reg-deposit"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "The amount of a pool registration deposit."
+      )
 
-
-pEpochBoundRetirement :: Parser (Maybe EpochNo)
+pEpochBoundRetirement :: Parser EpochNo
 pEpochBoundRetirement =
-  optional $
-    EpochNo
-       <$> Opt.option Opt.auto
-             (  Opt.long "pool-retirement-epoch-boundary"
-             <> Opt.metavar "INT"
-             <> Opt.help "Epoch bound on pool retirement."
-             )
+    EpochNo <$>
+    Opt.option Opt.auto
+      (  Opt.long "pool-retirement-epoch-boundary"
+      <> Opt.metavar "INT"
+      <> Opt.help "Epoch bound on pool retirement."
+      )
 
-
-
-pNumberOfPools :: Parser (Maybe Natural)
+pNumberOfPools :: Parser Natural
 pNumberOfPools =
-  optional
-    $ Opt.option Opt.auto
-        (  Opt.long "number-of-pools"
-        <> Opt.metavar "NATURAL"
-        <> Opt.help "Desired number of pools."
-        )
+    Opt.option Opt.auto
+      (  Opt.long "number-of-pools"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Desired number of pools."
+      )
 
-pPoolInfluence :: Parser (Maybe Rational)
+pPoolInfluence :: Parser Rational
 pPoolInfluence =
-  optional
-    $ Opt.option readRationalAsDouble
-        (  Opt.long "pool-influence"
-        <> Opt.metavar "DOUBLE"
-        <> Opt.help "Pool influence."
-        )
+    Opt.option readRational
+      (  Opt.long "pool-influence"
+      <> Opt.metavar "DOUBLE"
+      <> Opt.help "Pool influence."
+      )
 
-pTreasuryExpansion :: Parser (Maybe UnitInterval)
+pTreasuryExpansion :: Parser Rational
 pTreasuryExpansion =
-  optional
-    $ Opt.option pFieldUnitInterval
-        (  Opt.long "treasury-expansion"
-        <> Opt.metavar "DOUBLE"
-        <> Opt.help "Treasury expansion."
-        )
+    Opt.option readRationalUnitInterval
+      (  Opt.long "treasury-expansion"
+      <> Opt.metavar "DOUBLE"
+      <> Opt.help "Treasury expansion."
+      )
 
-
-pMonetaryExpansion :: Parser (Maybe UnitInterval)
+pMonetaryExpansion :: Parser Rational
 pMonetaryExpansion =
-  optional
-    $ Opt.option pFieldUnitInterval
-       (  Opt.long "monetary-expansion"
-       <> Opt.metavar "DOUBLE"
-       <> Opt.help "Monetary expansion."
-       )
+    Opt.option readRationalUnitInterval
+      (  Opt.long "monetary-expansion"
+      <> Opt.metavar "DOUBLE"
+      <> Opt.help "Monetary expansion."
+      )
 
-
-pDecentralParam :: Parser (Maybe UnitInterval)
+pDecentralParam :: Parser Rational
 pDecentralParam =
-  optional
-    $ Opt.option pFieldUnitInterval
-        (  Opt.long "decentralization-parameter"
-        <> Opt.metavar "DOUBLE"
-        <> Opt.help "Decentralization parameter."
+    Opt.option readRationalUnitInterval
+      (  Opt.long "decentralization-parameter"
+      <> Opt.metavar "DOUBLE"
+      <> Opt.help "Decentralization parameter."
+      )
+
+pExtraEntropy :: Parser (Maybe ByteString)
+pExtraEntropy =
+      Opt.option (Just <$> readerFromAttoParser parseEntropyBytes)
+        (  Opt.long "extra-entropy"
+        <> Opt.metavar "HEX"
+        <> Opt.help "Praos extra entropy, as a hex byte string."
+        )
+  <|> Opt.flag' Nothing
+        (  Opt.long "reset-extra-entropy"
+        <> Opt.help "Reset the Praos extra entropy to none."
+        )
+  where
+    parseEntropyBytes :: Atto.Parser ByteString
+    parseEntropyBytes =
+      (fst . Base16.decode) <$> Atto.takeWhile1 Char.isHexDigit
+
+
+pProtocol :: Parser Protocol
+pProtocol =
+    (  Opt.flag' ()
+        (  Opt.long "shelley-mode"
+        <> Opt.help "For talking to a node running in Shelley-only mode (default)."
+        )
+    *> pShelley
+    )
+  <|>
+    (  Opt.flag' ()
+        (  Opt.long "byron-mode"
+        <> Opt.help "For talking to a node running in Byron-only mode."
+        )
+    *> pByron
+    )
+  <|>
+    (  Opt.flag' ()
+        (  Opt.long "cardano-mode"
+        <> Opt.help "For talking to a node running in full Cardano mode."
+        )
+    *> pCardano
+    )
+  <|>
+    -- Default to the Shelley protocol for now, due to the testnet.
+    pure ShelleyProtocol
+  where
+    pByron :: Parser Protocol
+    pByron = ByronProtocol <$> pEpochSlots <*> pSecurityParam
+
+    pShelley :: Parser Protocol
+    pShelley = pure ShelleyProtocol
+
+    pCardano :: Parser Protocol
+    pCardano = CardanoProtocol <$> pEpochSlots <*> pSecurityParam
+
+    pEpochSlots :: Parser EpochSlots
+    pEpochSlots =
+      EpochSlots <$>
+        ( Opt.option Opt.auto
+            (  Opt.long "epoch-slots"
+            <> Opt.metavar "NATURAL"
+            <> Opt.help "The number of slots per epoch (default is 21600)."
+            )
+        <|>
+          -- Default to the mainnet value.
+          pure 21600
+        )
+
+    pSecurityParam :: Parser SecurityParam
+    pSecurityParam =
+      SecurityParam <$>
+        ( Opt.option Opt.auto
+            (  Opt.long "security-param"
+            <> Opt.metavar "NATURAL"
+            <> Opt.help "The security parameter (default is 2160)."
+            )
+        <|>
+          -- Default to the mainnet value.
+          pure 2160
+        )
+
+pProtocolVersion :: Parser (Natural, Natural)
+pProtocolVersion =
+    (,) <$> pProtocolMajorVersion <*> pProtocolMinorVersion
+  where
+    pProtocolMajorVersion =
+      Opt.option Opt.auto
+        (  Opt.long "protocol-major-version"
+        <> Opt.metavar "NATURAL"
+        <> Opt.help "Major protocol version. An increase indicates a hard fork."
+        )
+    pProtocolMinorVersion =
+      Opt.option Opt.auto
+        (  Opt.long "protocol-minor-version"
+        <> Opt.metavar "NATURAL"
+        <> Opt.help "Minor protocol version. An increase indicates a soft fork\
+                    \ (old software canvalidate but not produce new blocks)."
         )
 
 
+--
+-- Shelley CLI flag field parsers
+--
 
-pExtraEntropy :: Parser (Maybe Nonce)
-pExtraEntropy =
-   optional
-     $ Opt.option
-         (Opt.maybeReader nonceHash)
-           (  Opt.long "extra-entropy"
-           <> Opt.metavar "HASH"
-           <> Opt.help "Extra entropy."
-           <> Opt.value Shelley.NeutralNonce
-           )
+parseLovelace :: Atto.Parser Lovelace
+parseLovelace = Lovelace <$> Atto.decimal
+
+parseAddress :: Atto.Parser (Address Shelley)
+parseAddress = do
+    str <- lexPlausibleAddressString
+    case deserialiseAddress AsShelleyAddress str of
+      Nothing   -> fail "invalid address"
+      Just addr -> pure addr
+
+parseStakeAddress :: Atto.Parser StakeAddress
+parseStakeAddress = do
+    str <- lexPlausibleAddressString
+    case deserialiseAddress AsStakeAddress str of
+      Nothing   -> fail "invalid address"
+      Just addr -> pure addr
+
+lexPlausibleAddressString :: Atto.Parser Text
+lexPlausibleAddressString =
+    Text.decodeLatin1 <$> Atto.takeWhile1 isPlausibleAddressChar
   where
-    nonceHash :: String -> Maybe Nonce
-    nonceHash str = Nonce <$> (hashFromBytes $ C8.pack str)
+    -- Covers both base58 and bech32 (with constrained prefixes)
+    isPlausibleAddressChar c =
+         (c >= 'a' && c <= 'z')
+      || (c >= 'A' && c <= 'Z')
+      || (c >= '0' && c <= '9')
+      || c == '_'
 
-pProtocolVersion :: Parser (Maybe ProtVer)
-pProtocolVersion =
-  optional $
-    ProtVer
-      <$> Opt.option Opt.auto
-            (  Opt.long "protocol-major-version"
-            <> Opt.metavar "NATURAL"
-            <> Opt.help "Major protocol version. An increase indicates a hard fork."
-            )
-      <*> Opt.option Opt.auto
-            (  Opt.long "protocol-minor-version"
-            <> Opt.metavar "NATURAL"
-            <> Opt.help "Minor protocol version. An increase indicates a soft fork\
-                        \ (old software canvalidate but not produce new blocks)."
-            )
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
 
-pFieldUnitInterval :: Opt.ReadM UnitInterval
-pFieldUnitInterval = Opt.auto >>= checkUnitInterval
-  where
-   checkUnitInterval :: Double -> Opt.ReadM UnitInterval
-   checkUnitInterval dbl =
-     case mkUnitInterval $ realToFrac dbl of
-       Just interval -> return interval
-       Nothing -> fail "Please enter a value in the range [0,1]"
+readURIOfMaxLength :: Int -> Opt.ReadM URI
+readURIOfMaxLength maxLen = do
+  s <- readStringOfMaxLength maxLen
+  maybe (fail "The provided string must be a valid URI.") pure (parseURI s)
 
-readRationalAsDouble :: Opt.ReadM Rational
-readRationalAsDouble = toRational <$> (Opt.auto :: Opt.ReadM Double)
+readStringOfMaxLength :: Int -> Opt.ReadM String
+readStringOfMaxLength maxLen = do
+  s <- Opt.str
+  let strLen = length s
+  if strLen <= maxLen
+    then pure s
+    else fail $
+      "The provided string must have at most 64 characters, but it has "
+        <> show strLen
+        <> " characters."
+
+readRationalUnitInterval :: Opt.ReadM Rational
+readRationalUnitInterval = readRational >>= checkUnitInterval
+  where
+   checkUnitInterval :: Rational -> Opt.ReadM Rational
+   checkUnitInterval q
+     | q >= 0 && q <= 1 = return q
+     | otherwise        = fail "Please enter a value in the range [0,1]"
+
+readRational :: Opt.ReadM Rational
+readRational = toRational <$> readerFromAttoParser Atto.scientific
+
+readerFromAttoParser :: Atto.Parser a -> Opt.ReadM a
+readerFromAttoParser p =
+    Opt.eitherReader (Atto.parseOnly (p <* Atto.endOfInput) . BSC.pack)

@@ -16,8 +16,6 @@ import qualified Data.Text as Text
 
 
 import qualified Cardano.Binary as Binary
-import           Cardano.Config.Protocol
-                   (CardanoEra(..), RealPBFTError, renderRealPBFTError)
 import           Cardano.Config.Types
 import           Cardano.Chain.Update
                    (AVote(..), Vote, mkVote, recoverUpId, recoverVoteId)
@@ -27,13 +25,13 @@ import           Ouroboros.Consensus.Byron.Ledger.Block (ByronBlock)
 import           Ouroboros.Consensus.Byron.Ledger.Mempool (GenTx(..))
 import           Ouroboros.Consensus.Ledger.SupportsMempool (txId)
 import           Ouroboros.Consensus.Util.Condense (condense)
-import           Ouroboros.Network.IOManager (IOManager)
 
 import           Cardano.Api (Network, toByronProtocolMagic)
+import           Cardano.Api.Typed (NetworkId)
 
 import           Cardano.CLI.Byron.Genesis (ByronGenesisError)
 import           Cardano.CLI.Byron.Tx (ByronTxError, nodeSubmitTx)
-import           Cardano.CLI.Byron.Key (ByronKeyFailure, readEraSigningKey)
+import           Cardano.CLI.Byron.Key (CardanoEra(..), ByronKeyFailure, readEraSigningKey)
 import           Cardano.CLI.Helpers (HelpersError, ensureNewFileLBS)
 
 
@@ -43,7 +41,6 @@ data ByronVoteError
   | ByronVoteGenesisReadError !ByronGenesisError
   | ByronVoteKeyReadFailure !ByronKeyFailure
   | ByronVoteReadFileFailure !FilePath !Text
-  | ByronVoteSubmissionError !RealPBFTError
   | ByronVoteTxSubmissionError !ByronTxError
   | ByronVoteUpdateProposalFailure !ByronUpdateProposalError
   | ByronVoteUpdateHelperError !HelpersError
@@ -55,7 +52,6 @@ renderByronVoteError bVerr =
     ByronVoteDecodingError decoderErr -> "Error decoding Byron vote: " <> (Text.pack $ show decoderErr)
     ByronVoteGenesisReadError genErr -> "Error reading the genesis file:" <> (Text.pack $ show genErr)
     ByronVoteReadFileFailure fp err -> "Error reading Byron vote at " <> Text.pack fp <> " Error: " <> err
-    ByronVoteSubmissionError realPBFTErr -> "Error submitting Byron vote: " <> renderRealPBFTError realPBFTErr
     ByronVoteTxSubmissionError txErr -> "Error submitting the transaction: " <> (Text.pack $ show txErr)
     ByronVoteUpdateProposalFailure err -> "Error reading the update proposal: " <> (Text.pack $ show err)
     ByronVoteUpdateHelperError err ->"Error creating the vote: " <> (Text.pack $ show err)
@@ -95,13 +91,12 @@ serialiseByronVote :: Vote -> LByteString
 serialiseByronVote = Binary.serialize
 
 submitByronVote
-  :: IOManager
-  -> Network
+  :: NetworkId
   -> FilePath
   -> ExceptT ByronVoteError IO ()
-submitByronVote iomgr network voteFp = do
+submitByronVote network voteFp = do
     voteBs <- liftIO $ LB.readFile voteFp
     vote <- hoistEither $ deserialiseByronVote voteBs
     let genTx = convertVoteToGenTx vote
     traceWith stdoutTracer ("Vote TxId: " ++ condense (txId genTx))
-    firstExceptT ByronVoteTxSubmissionError $ nodeSubmitTx iomgr network genTx
+    firstExceptT ByronVoteTxSubmissionError $ nodeSubmitTx network genTx

@@ -41,7 +41,7 @@ import qualified Graphics.Vty as Vty
 import           Numeric (showFFloat)
 import           Text.Printf (printf)
 
-import           Cardano.Config.Types (Protocol(..))
+import           Cardano.Node.Types (Protocol(..))
 import           Cardano.Tracing.Peer (Peer(..), ppPeer)
 
 data ColorTheme
@@ -66,7 +66,6 @@ data LiveViewState blk a = LiveViewState
   , lvsNodeCannotLead       :: !Word64
   , lvsLeaderNum            :: !Word64
   , lvsSlotsMissedNum       :: !Word64
-  , lvsCreatedForksNum      :: !Word64
   , lvsTransactions         :: !Word64
   , lvsPeersConnected       :: !Word64
   , lvsMempool              :: !Word64
@@ -201,7 +200,6 @@ nodeInfoLabels =
            ,                    txt "slots lead:"
            ,                    txt "slots missed:"
            ,                    txt "cannot lead:"
-           ,                    txt "forks created:"
            , padTop (Pad 1) $ txt "TXs processed:"
            , padTop (Pad 1) $ txt "peers:"
            ]
@@ -231,7 +229,6 @@ nodeInfoValues lvs =
            ,                  str (show . lvsLeaderNum $ lvs)
            ,                  str (show . lvsSlotsMissedNum $ lvs)
            ,                  str (show . lvsNodeCannotLead $ lvs)
-           ,                  str (show . lvsCreatedForksNum $ lvs)
            , padTop (Pad 1) $ str (show . lvsTransactions $ lvs)
            , padTop (Pad 1) $ str (show . lvsPeersConnected $ lvs)
            ]

@@ -58,12 +58,12 @@ import           Cardano.Chain.Genesis
 import           Cardano.Chain.UTxO (TxId, TxIn(..), TxOut(..))
 
 import           Cardano.Api (Network(..), NetworkMagic(..))
+import qualified Cardano.Api.Typed as Typed
 import           Cardano.Config.Types
 import           Cardano.Config.Parsers
                    (parseIntegral, parseFraction, parseLovelace, readDouble,
                     parseFilePath,  parseSigningKeyFile,
                     parseGenesisFile, command', parseFlag')
-import           Cardano.Config.Protocol (CardanoEra(..))
 
 import           Cardano.CLI.Byron.Commands
 import           Cardano.CLI.Byron.Genesis
@@ -250,7 +250,7 @@ parseLocalNodeQueryValues =
     mconcat
         [ command' "get-tip" "Get the tip of your local node's blockchain"
             $ GetLocalNodeTip
-                <$> parseNetwork
+                <$> pNetworkId
         ]
 
 parseMiscellaneous :: Mod CommandFields ByronCommand
@@ -316,7 +316,7 @@ parseTxRelatedValues =
         "submit-tx"
         "Submit a raw, signed transaction, in its on-wire representation."
         $ SubmitTx
-            <$> parseNetwork
+            <$> pNetworkId
             <*> parseTxFile "tx"
     , command'
         "issue-genesis-utxo-expenditure"
@@ -382,7 +382,7 @@ parseByronUpdateProposal = do
 parseByronVoteSubmission :: Parser NodeCmd
 parseByronVoteSubmission = do
   SubmitVote
-    <$> parseNetwork
+    <$> pNetworkId
     <*> parseFilePath "filepath" "Filepath of Byron update proposal vote."
 
 parseParametersToUpdate :: Parser [ParametersToUpdate]
@@ -408,7 +408,7 @@ parseParametersToUpdate =
 parseByronUpdateProposalSubmission :: Parser NodeCmd
 parseByronUpdateProposalSubmission =
   SubmitUpdateProposal
-    <$> parseNetwork
+    <$> pNetworkId
     <*> parseFilePath "filepath" "Filepath of Byron update proposal."
 
 
@@ -593,7 +593,7 @@ parseWord optname desc metvar = option (fromInteger <$> auto)
 
 parseAddress :: String -> String -> Parser Address
 parseAddress opt desc =
-  option (cliParseBase58Address <$> auto)
+  option (cliParseBase58Address <$> str)
     $ long opt <> metavar "ADDR" <> help desc
 
 parseCardanoEra :: Parser CardanoEra
@@ -606,15 +606,8 @@ parseCardanoEra = asum
         long "byron-formats"
      <> help "Byron era formats and compatibility"
 
-  , flag' ShelleyEra $
-        long "shelley-formats"
-     <> help "Shelley-era formats and compatibility"
-
-    -- And various hidden compatibility flag aliases:
+    -- And hidden compatibility flag aliases:
   , flag' ByronEraLegacy $ hidden <> long "byron-legacy"
-  , flag' ShelleyEra     $ hidden <> long "bft"
-  , flag' ShelleyEra     $ hidden <> long "praos"
-  , flag' ShelleyEra     $ hidden <> long "mock-pbft"
   , flag' ByronEra       $ hidden <> long "real-pbft"
   ]
 
@@ -651,6 +644,26 @@ parseFractionWithDefault optname desc w =
 parseNetwork :: Parser Network
 parseNetwork =
   parseMainnet <|> fmap Testnet parseTestnetMagic
+
+pNetworkId :: Parser Typed.NetworkId
+pNetworkId =
+  pMainnet' <|> fmap Typed.Testnet pTestnetMagic
+ where
+   pMainnet' :: Parser Typed.NetworkId
+   pMainnet' =
+    Opt.flag' Typed.Mainnet
+      (  Opt.long "mainnet"
+      <> Opt.help "Use the mainnet magic id."
+      )
+
+pTestnetMagic :: Parser NetworkMagic
+pTestnetMagic =
+  NetworkMagic <$>
+    Opt.option Opt.auto
+      (  Opt.long "testnet-magic"
+      <> Opt.metavar "NATURAL"
+      <> Opt.help "Specify a testnet magic id."
+      )
 
 parseMainnet :: Parser Network
 parseMainnet =

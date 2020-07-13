@@ -1,6 +1,33 @@
 # Changelog for cardano-cli
 
-## 1.13.0 -- June 2020
+## 1.15.1 -- July 2020
+
+- Support for interacting with nodes running in Byron-only, Shelley-only or
+  the composite Cardano mode (Byron;Shelley) (#1435)
+- Add support for byron keys and extended ed25519 keys (#1411)
+- Port the CLI command implementations to the new API (#1416)
+- Fix the output of the calculate-min-fee command (#1408)
+- New stake and VRF key hashing commands (#1407)
+- Use JSON output format for the address info command (#1426)
+
+## 1.15.0 -- July 2020
+
+- Fix the ledger state dump query (#1333, #1334)
+- Fix the format of Byron addresses used in Byron CLI commands (#1326)
+- Port CLI commands to use the new API (#1341, #1375, #1396, #1397)
+- Change to JSON output for the "query tip" command (#1340, #1365)
+- Moving code around to eliminate the cardano-config package (#1289, #1316)
+
+## 1.14.2 -- June 2020
+
+- Fix the hashing of stake pool metadata
+- Fix the query that dumps the ledger state as JSON (#1333)
+
+## 1.14.1 -- June 2020
+
+No changes in the cardano-cli. There were changes in the cardano-node.
+
+## 1.14.0 -- June 2020
 
 - New flags for transaction metadata in tx construction (#1233)
 - New flags for reward account withdrawals in tx construction (#1237)

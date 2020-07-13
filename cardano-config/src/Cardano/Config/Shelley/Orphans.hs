@@ -24,8 +24,10 @@ import           Cardano.Crypto.Hash.Class as Crypto
 import           Cardano.TracingOrphanInstances.Common ()
 
 import           Ouroboros.Consensus.Shelley.Protocol.Crypto (TPraosStandardCrypto)
+import           Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyHash(..))
 
 import           Shelley.Spec.Ledger.BaseTypes (StrictMaybe)
+import           Shelley.Spec.Ledger.BlockChain (HashHeader(..))
 import qualified Shelley.Spec.Ledger.Credential as Ledger
 import           Shelley.Spec.Ledger.Crypto (Crypto)
 import qualified Shelley.Spec.Ledger.EpochBoundary as Ledger
@@ -69,6 +71,9 @@ deriving newtype instance ToJSON (TxId c)
 
 deriving newtype instance Crypto c => ToJSON (UTxO c)
 
+deriving newtype instance ToJSON (ShelleyHash c)
+deriving newtype instance ToJSON (HashHeader c)
+
 deriving newtype instance ToJSON (MetaDataHash c)
 deriving newtype instance ToJSON Ledger.LogWeight
 deriving newtype instance ToJSON Ledger.Likelihood
@@ -76,6 +81,7 @@ deriving newtype instance ToJSON (Ledger.Stake TPraosStandardCrypto)
 
 deriving anyclass instance ToJSON (Ledger.GenDelegs TPraosStandardCrypto)
 deriving anyclass instance ToJSON (Ledger.ProposedPPUpdates TPraosStandardCrypto)
+deriving anyclass instance ToJSON (Ledger.PPUPState TPraosStandardCrypto)
 deriving anyclass instance ToJSON (Ledger.StakePools TPraosStandardCrypto)
 
 deriving instance ToJSON Ledger.Ptr
