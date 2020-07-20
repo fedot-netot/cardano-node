@@ -43,6 +43,7 @@ runNodeCmd (NodeKeyGenCold vk sk ctr) = runNodeKeyGenCold vk sk ctr
 runNodeCmd (NodeKeyGenKES  vk sk)     = runNodeKeyGenKES  vk sk
 runNodeCmd (NodeKeyGenVRF  vk sk)     = runNodeKeyGenVRF  vk sk
 runNodeCmd (NodeKeyHashVRF vk mOutFp) = runNodeKeyHashVRF vk mOutFp
+runNodeCmd (NodeNewCounter vk ctr out) = runNodeNewCounter vk ctr out
 runNodeCmd (NodeIssueOpCert vk sk ctr p out) =
   runNodeIssueOpCert vk sk ctr p out
 
@@ -76,7 +77,7 @@ runNodeKeyGenCold (VerificationKeyFile vkeyPath) (SigningKeyFile skeyPath)
     vkeyDesc = TextViewDescription "Stake Pool Operator Verification Key"
     ocertCtrDesc = TextViewDescription $ "Next certificate issue number: " <> BS.pack (show initialCounter)
 
-    initialCounter :: Natural
+    initialCounter :: Word64
     initialCounter = 0
 
 
@@ -126,6 +127,29 @@ runNodeKeyHashVRF (VerificationKeyFile vkeyPath) mOutputFp = do
   case mOutputFp of
     Just (OutputFile fpath) -> liftIO $ BS.writeFile fpath hexKeyHash
     Nothing -> liftIO $ BS.putStrLn hexKeyHash
+
+
+runNodeNewCounter :: VerificationKeyFile
+                  -> Word
+                  -> OpCertCounterFile
+                  -> ExceptT ShelleyNodeCmdError IO ()
+runNodeNewCounter (VerificationKeyFile vkeyPath) counter
+                  (OpCertCounterFile ocertCtrPath) = do
+
+    vkey <- firstExceptT ShelleyNodeReadFileError . newExceptT $
+              readFileTextEnvelopeAnyOf
+                [ FromSomeType (AsVerificationKey AsStakePoolKey) id
+                , FromSomeType (AsVerificationKey AsGenesisDelegateKey)
+                               castVerificationKey
+                ]
+                vkeyPath
+
+    let ocertIssueCounter =
+          OperationalCertificateIssueCounter (fromIntegral counter) vkey
+
+    firstExceptT ShelleyNodeWriteFileError . newExceptT $
+      writeFileTextEnvelope ocertCtrPath Nothing ocertIssueCounter
+
 
 runNodeIssueOpCert :: VerificationKeyFile
                    -- ^ This is the hot KES verification key.
@@ -178,14 +202,18 @@ runNodeIssueOpCert (VerificationKeyFile vkeyKesPath)
       . newExceptT
       $ writeFileTextEnvelope certFile Nothing ocert
   where
-    getCounter :: OperationalCertificateIssueCounter -> Natural
+    getCounter :: OperationalCertificateIssueCounter -> Word64
     getCounter (OperationalCertificateIssueCounter n _) = n
 
-    ocertCtrDesc :: Natural -> TextViewDescription
+    ocertCtrDesc :: Word64 -> TextViewDescription
     ocertCtrDesc n = TextViewDescription $ "Next certificate issue number: " <> BS.pack (show n)
 
-    possibleBlockIssuers :: [FromSomeType HasTextEnvelope (SigningKey StakePoolKey)]
+    possibleBlockIssuers
+      :: [FromSomeType HasTextEnvelope
+                       (Either (SigningKey StakePoolKey)
+                               (SigningKey GenesisDelegateExtendedKey))]
     possibleBlockIssuers =
-      [ FromSomeType (AsSigningKey AsStakePoolKey)       id
-      , FromSomeType (AsSigningKey AsGenesisDelegateKey) castSigningKey
+      [ FromSomeType (AsSigningKey AsStakePoolKey)        Left
+      , FromSomeType (AsSigningKey AsGenesisDelegateKey) (Left . castSigningKey)
+      , FromSomeType (AsSigningKey AsGenesisDelegateExtendedKey) Right
       ]

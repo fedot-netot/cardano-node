@@ -63,7 +63,7 @@ extra-deps:
   - websockets-0.12.6.1
 
   - git: https://github.com/input-output-hk/cardano-ledger-specs
-    commit: 12b13f390d64df6af6054b0d33bb3767756da041
+    commit: 550a70b9ff83c9e9ddbcb7f7b49ee93161bb29ed
     subdirs:
       # small-steps
       - semantics/executable-spec
@@ -89,7 +89,7 @@ extra-deps:
       - test
 
   - git: https://github.com/input-output-hk/cardano-base
-    commit: 5e0b8bc8c7862be12da6989440f8644ba7c1e1cf
+    commit: 7d795c3040ea7785812efa1c97864bbb41b15d3e
     subdirs:
       - binary
       - binary/test
@@ -127,7 +127,7 @@ extra-deps:
     #Ouroboros-network dependencies
 
   - git: https://github.com/input-output-hk/ouroboros-network
-    commit: 1361bb92814c65e5964732777fc7f8ec9ebdccfe
+    commit: 1c8924b856baf809f193798ff686cdb2c0ed25d2
     subdirs:
         - io-sim
         - io-sim-classes

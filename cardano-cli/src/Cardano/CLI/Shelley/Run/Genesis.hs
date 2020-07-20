@@ -30,7 +30,7 @@ import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT
                    hoistEither, left, newExceptT)
 
 import           Cardano.Api.Typed
-import           Cardano.Api.TextView
+import           Cardano.Api.TextView (TextViewDescription(..))
 import           Cardano.Api.Shelley.Genesis
 
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
@@ -40,6 +40,7 @@ import qualified Shelley.Spec.Ledger.Address as Ledger
 import qualified Shelley.Spec.Ledger.Coin    as Ledger
 import qualified Shelley.Spec.Ledger.Keys as Ledger
 
+import           Cardano.CLI.Helpers (textShow)
 import           Cardano.CLI.Shelley.Commands
 import           Cardano.CLI.Shelley.Parsers (renderTxIn)
 
@@ -142,7 +143,7 @@ runGenesisKeyGenDelegate (VerificationKeyFile vkeyPath)
     vkeyDesc = TextViewDescription "Genesis delegate operator key"
     certCtrDesc = TextViewDescription $ "Next certificate issue number: " <> BS.pack (show initialCounter)
 
-    initialCounter :: Natural
+    initialCounter :: Word64
     initialCounter = 0
 
 

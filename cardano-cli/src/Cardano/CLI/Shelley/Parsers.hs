@@ -66,6 +66,8 @@ parseShelleyCommands =
           (Opt.info (AddressCmd <$> pAddressCmd) $ Opt.progDesc "Shelley payment address commands")
       , Opt.command "stake-address"
           (Opt.info (StakeAddressCmd <$> pStakeAddress) $ Opt.progDesc "Shelley stake address commands")
+      , Opt.command "key"
+          (Opt.info (KeyCmd <$> pKeyCmd) $ Opt.progDesc "Shelley key utility commands")
       , Opt.command "transaction"
           (Opt.info (TransactionCmd <$> pTransaction) $ Opt.progDesc "Shelley transaction commands")
       , Opt.command "node"
@@ -135,8 +137,6 @@ pAddressCmd =
           (Opt.info pAddressBuildMultiSig $ Opt.progDesc "Build a Shelley payment multi-sig address.")
       , Opt.command "info"
           (Opt.info pAddressInfo $ Opt.progDesc "Print information about an address.")
-      , Opt.command "convert"
-          (Opt.info pAddressConvert $ Opt.progDesc "Convert a Byron signing key file.")
       ]
   where
     pAddressKeyGen :: Parser AddressCmd
@@ -161,10 +161,6 @@ pAddressCmd =
 
     pAddressInfo :: Parser AddressCmd
     pAddressInfo = AddressInfo <$> pAddress <*> pMaybeOutputFile
-
-    pAddressConvert :: Parser AddressCmd
-    pAddressConvert = AddressConvertKey <$> pByronKeyFile Input
-                                        <*> pSigningKeyFile Output
 
 pPaymentVerificationKeyFile :: Parser VerificationKeyFile
 pPaymentVerificationKeyFile =
@@ -205,8 +201,6 @@ pStakeAddress =
           (Opt.info pStakeAddressDeregistrationCert $ Opt.progDesc "Create a stake address deregistration certificate")
       , Opt.command "delegation-certificate"
           (Opt.info pStakeAddressDelegationCert $ Opt.progDesc "Create a stake address delegation certificate")
-      , Opt.command "convert-itn-key"
-          (Opt.info pConvertITNKey $ Opt.progDesc "Convert an ITN public/private key to a shelley stake verification/signing key")
       ]
   where
     pStakeAddressKeyGen :: Parser StakeAddressCmd
@@ -245,16 +239,8 @@ pStakeAddress =
     pStakeAddressDelegationCert :: Parser StakeAddressCmd
     pStakeAddressDelegationCert = StakeKeyDelegationCert
                                     <$> pStakeVerificationKeyFile
-                                    <*> pPoolStakingVerificationKeyFile
+                                    <*> pStakePoolVerificationKeyHashOrFile
                                     <*> pOutputFile
-
-    pConvertITNKey :: Parser StakeAddressCmd
-    pConvertITNKey = StakeKeyITNConversion
-                       <$> pITNKeyFIle
-                       <*> pMaybeOutputFile
-
-    pITNKeyFIle :: Parser ITNKeyFile
-    pITNKeyFIle = pITNSigningKeyFile <|> pITNVerificationKeyFile
 
 pDelegationFee :: Parser Lovelace
 pDelegationFee =
@@ -264,6 +250,156 @@ pDelegationFee =
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The delegation fee in Lovelace."
       )
+
+pKeyCmd :: Parser KeyCmd
+pKeyCmd =
+  Opt.subparser $
+    mconcat
+      [ Opt.command "verification-key" $
+          Opt.info pKeyGetVerificationKey $
+            Opt.progDesc $ "Get a verification key from a signing key. This "
+                        ++ " supports all key types."
+
+      , Opt.command "non-extended-key" $
+          Opt.info pKeyNonExtendedKey $
+            Opt.progDesc $ "Get a non-extended verification key from an "
+                        ++ "extended verification key. This supports all "
+                        ++ "extended key types."
+
+      , Opt.command "convert-byron-key" $
+          Opt.info pKeyConvertByronKey $
+            Opt.progDesc $ "Convert a Byron payment, genesis or genesis "
+                        ++ "delegate key (signing or verification) to a "
+                        ++ "corresponding Shelley-format key."
+
+      , Opt.command "convert-byron-genesis-vkey" $
+          Opt.info pKeyConvertByronGenesisVKey $
+            Opt.progDesc $ "Convert a Base64-encoded Byron genesis "
+                        ++ "verification key to a Shelley genesis "
+                        ++ "verification key"
+
+      , Opt.command "convert-itn-key" $
+          Opt.info pKeyConvertITNKey $
+            Opt.progDesc $ "Convert an Incentivized Testnet (ITN) non-extended "
+                        ++ "signing or verification key to a corresponding "
+                        ++ "Shelley stake key"
+      ]
+  where
+    pKeyGetVerificationKey :: Parser KeyCmd
+    pKeyGetVerificationKey =
+      KeyGetVerificationKey
+        <$> pSigningKeyFile      Input
+        <*> pVerificationKeyFile Output
+
+    pKeyNonExtendedKey :: Parser KeyCmd
+    pKeyNonExtendedKey =
+      KeyNonExtendedKey
+        <$> pExtendedVerificationKeyFile Input
+        <*> pVerificationKeyFile Output
+
+    pKeyConvertByronKey :: Parser KeyCmd
+    pKeyConvertByronKey =
+      KeyConvertByronKey
+        <$> pByronKeyType
+        <*> pByronKeyFile
+        <*> pOutputFile
+
+    pByronKeyType :: Parser ByronKeyType
+    pByronKeyType =
+          Opt.flag' (ByronPaymentKey NonLegacyByronKeyFormat)
+            (  Opt.long "byron-payment-key-type"
+            <> Opt.help "Use a Byron-era payment key."
+            )
+      <|> Opt.flag' (ByronPaymentKey LegacyByronKeyFormat)
+            (  Opt.long "legacy-byron-payment-key-type"
+            <> Opt.help "Use a Byron-era payment key, in legacy SL format."
+            )
+      <|> Opt.flag' (ByronGenesisKey NonLegacyByronKeyFormat)
+            (  Opt.long "byron-genesis-key-type"
+            <> Opt.help "Use a Byron-era genesis key."
+            )
+      <|> Opt.flag' (ByronGenesisKey LegacyByronKeyFormat)
+            (  Opt.long "legacy-byron-genesis-key-type"
+            <> Opt.help "Use a Byron-era genesis key, in legacy SL format."
+            )
+      <|> Opt.flag' (ByronDelegateKey NonLegacyByronKeyFormat)
+            (  Opt.long "byron-genesis-delegate-key-type"
+            <> Opt.help "Use a Byron-era genesis delegate key."
+            )
+      <|> Opt.flag' (ByronDelegateKey LegacyByronKeyFormat)
+            (  Opt.long "legacy-byron-genesis-delegate-key-type"
+            <> Opt.help "Use a Byron-era genesis delegate key, in legacy SL format."
+            )
+
+    pByronKeyFile :: Parser SomeKeyFile
+    pByronKeyFile =
+          (ASigningKeyFile      <$> pByronSigningKeyFile)
+      <|> (AVerificationKeyFile <$> pByronVerificationKeyFile)
+
+    pByronSigningKeyFile :: Parser SigningKeyFile
+    pByronSigningKeyFile =
+      SigningKeyFile <$>
+        Opt.strOption
+          (  Opt.long "byron-signing-key-file"
+          <> Opt.metavar "FILE"
+          <> Opt.help ("Input filepath of the Byron-format signing key.")
+          <> Opt.completer (Opt.bashCompleter "file")
+          )
+
+    pByronVerificationKeyFile :: Parser VerificationKeyFile
+    pByronVerificationKeyFile =
+      VerificationKeyFile <$>
+        Opt.strOption
+          (  Opt.long "byron-verification-key-file"
+          <> Opt.metavar "FILE"
+          <> Opt.help ("Input filepath of the Byron-format verification key.")
+          <> Opt.completer (Opt.bashCompleter "file")
+          )
+
+    pKeyConvertByronGenesisVKey :: Parser KeyCmd
+    pKeyConvertByronGenesisVKey =
+      KeyConvertByronGenesisVKey
+        <$> pByronGenesisVKeyBase64
+        <*> pOutputFile
+
+    pByronGenesisVKeyBase64 :: Parser VerificationKeyBase64
+    pByronGenesisVKeyBase64 =
+      VerificationKeyBase64 <$>
+        Opt.strOption
+          (  Opt.long "byron-genesis-verification-key"
+          <> Opt.metavar "BASE64"
+          <> Opt.help "Base64 string for the Byron genesis verification key."
+          )
+
+    pKeyConvertITNKey :: Parser KeyCmd
+    pKeyConvertITNKey =
+      KeyConvertITNStakeKey
+        <$> pITNKeyFIle
+        <*> pOutputFile
+
+    pITNKeyFIle :: Parser SomeKeyFile
+    pITNKeyFIle = pITNSigningKeyFile
+              <|> pITNVerificationKeyFile
+
+    pITNSigningKeyFile :: Parser SomeKeyFile
+    pITNSigningKeyFile =
+      ASigningKeyFile . SigningKeyFile <$>
+        Opt.strOption
+          (  Opt.long "itn-signing-key-file"
+          <> Opt.metavar "FILE"
+          <> Opt.help "Filepath of the ITN signing key."
+          <> Opt.completer (Opt.bashCompleter "file")
+          )
+
+    pITNVerificationKeyFile :: Parser SomeKeyFile
+    pITNVerificationKeyFile =
+      AVerificationKeyFile . VerificationKeyFile <$>
+        Opt.strOption
+          (  Opt.long "itn-verification-key-file"
+          <> Opt.metavar "FILE"
+          <> Opt.help "Filepath of the ITN verification key."
+          <> Opt.completer (Opt.bashCompleter "file")
+          )
 
 pTransaction :: Parser TransactionCmd
 pTransaction =
@@ -310,10 +446,15 @@ pTransaction =
                               <*> pTxFile Output
 
     pTransactionWitness :: Parser TransactionCmd
-    pTransactionWitness = pure TxWitness
+    pTransactionWitness = TxWitness <$> pTxBodyFile Input
+                                    <*> pWitnessSigningKeyFile
+                                    <*> optional pNetworkId
+                                    <*> pOutputFile
 
     pTransactionSignWit :: Parser TransactionCmd
-    pTransactionSignWit = pure TxSignWitness
+    pTransactionSignWit = TxSignWitness <$> pTxBodyFile Input
+                                        <*> some pWitnessFile
+                                        <*> pOutputFile
 
     pTransactionCheck  :: Parser TransactionCmd
     pTransactionCheck = pure TxCheck
@@ -331,8 +472,8 @@ pTransaction =
         <*> pProtocolParamsFile
         <*> pTxInCount
         <*> pTxOutCount
-        <*> pTxShelleyWinessCount
-        <*> pTxByronWinessCount
+        <*> pTxShelleyWitnessCount
+        <*> pTxByronWitnessCount
 
     pTransactionId  :: Parser TransactionCmd
     pTransactionId = TxGetTxId <$> pTxBodyFile Input
@@ -355,6 +496,9 @@ pNodeCmd =
       , Opt.command "key-hash-VRF"
           (Opt.info pKeyHashVRF $
              Opt.progDesc "Print hash of a node's operational VRF key.")
+      , Opt.command "new-counter"
+          (Opt.info pNewCounter $
+             Opt.progDesc "Create a new certificate issue counter")
       , Opt.command "issue-op-cert"
           (Opt.info pIssueOpCert $
              Opt.progDesc "Issue a node operational certificate")
@@ -377,6 +521,20 @@ pNodeCmd =
     pKeyHashVRF :: Parser NodeCmd
     pKeyHashVRF =
       NodeKeyHashVRF <$> pVerificationKeyFile Input <*> pMaybeOutputFile
+
+    pNewCounter :: Parser NodeCmd
+    pNewCounter =
+      NodeNewCounter <$> pColdVerificationKeyFile
+                     <*> pCounterValue
+                     <*> pOperatorCertIssueCounterFile
+
+    pCounterValue :: Parser Word
+    pCounterValue =
+        Opt.option Opt.auto
+          (  Opt.long "counter-value"
+          <> Opt.metavar "INT"
+          <> Opt.help "The next certificate issue counter value to use."
+          )
 
     pIssueOpCert :: Parser NodeCmd
     pIssueOpCert =
@@ -849,16 +1007,6 @@ pColdSigningKeyFile =
       )
     )
 
-pITNSigningKeyFile :: Parser ITNKeyFile
-pITNSigningKeyFile =
-  ITNSigningKeyFile . SigningKeyFile <$>
-    Opt.strOption
-      (  Opt.long "itn-signing-key-file"
-      <> Opt.metavar "FILE"
-      <> Opt.help "Filepath of the ITN signing key."
-      <> Opt.completer (Opt.bashCompleter "file")
-      )
-
 pSomeSigningKeyFiles :: Parser [SigningKeyFile]
 pSomeSigningKeyFiles =
   some $
@@ -880,15 +1028,16 @@ pSigningKeyFile fdir =
       <> Opt.completer (Opt.bashCompleter "file")
       )
 
-pByronKeyFile :: FileDirection -> Parser SigningKeyFile
-pByronKeyFile fdir =
+pWitnessSigningKeyFile :: Parser SigningKeyFile
+pWitnessSigningKeyFile =
   SigningKeyFile <$>
-    Opt.strOption
-      (  Opt.long "byron-signing-key-file"
-      <> Opt.metavar "FILE"
-      <> Opt.help (show fdir ++ " filepath of the Byron format signing key.")
-      <> Opt.completer (Opt.bashCompleter "file")
-      )
+    ( Opt.strOption
+        (  Opt.long "witness-signing-key-file"
+        <> Opt.metavar "FILE"
+        <> Opt.help "Filepath of the witness signing key."
+        <> Opt.completer (Opt.bashCompleter "file")
+        )
+    )
 
 pBlockId :: Parser BlockId
 pBlockId =
@@ -1027,6 +1176,16 @@ pVerificationKeyFile fdir =
       <> Opt.completer (Opt.bashCompleter "file")
       )
 
+pExtendedVerificationKeyFile :: FileDirection -> Parser VerificationKeyFile
+pExtendedVerificationKeyFile fdir =
+  VerificationKeyFile <$>
+    Opt.strOption
+      (  Opt.long "extended-verification-key-file"
+      <> Opt.metavar "FILE"
+      <> Opt.help (show fdir ++ " filepath of the ed25519-bip32 verification key.")
+      <> Opt.completer (Opt.bashCompleter "file")
+      )
+
 pGenesisVerificationKeyFile :: Parser VerificationKeyFile
 pGenesisVerificationKeyFile =
   VerificationKeyFile <$>
@@ -1053,16 +1212,6 @@ pKESVerificationKeyFile =
         <> Opt.internal
         )
     )
-
-pITNVerificationKeyFile :: Parser ITNKeyFile
-pITNVerificationKeyFile =
-  ITNVerificationKeyFile . VerificationKeyFile <$>
-    Opt.strOption
-      (  Opt.long "itn-verification-key-file"
-      <> Opt.metavar "FILE"
-      <> Opt.help "Filepath of the ITN verification key."
-      <> Opt.completer (Opt.bashCompleter "file")
-      )
 
 pNetworkId :: Parser NetworkId
 pNetworkId =
@@ -1155,6 +1304,16 @@ pTxFee =
       <> Opt.help "The fee amount in Lovelace."
       )
 
+pWitnessFile :: Parser WitnessFile
+pWitnessFile =
+  WitnessFile <$>
+    Opt.strOption
+      (  Opt.long "witness-file"
+      <> Opt.metavar "FILE"
+      <> Opt.help ("Filepath of the witness.")
+      <> Opt.completer (Opt.bashCompleter "file")
+      )
+
 pTxBodyFile :: FileDirection -> Parser TxBodyFile
 pTxBodyFile fdir =
     TxBodyFile <$>
@@ -1216,18 +1375,18 @@ pTxOutCount =
       <> Opt.help "The number of transaction outputs."
       )
 
-pTxShelleyWinessCount :: Parser TxShelleyWinessCount
-pTxShelleyWinessCount =
-  TxShelleyWinessCount <$>
+pTxShelleyWitnessCount :: Parser TxShelleyWitnessCount
+pTxShelleyWitnessCount =
+  TxShelleyWitnessCount <$>
     Opt.option Opt.auto
       (  Opt.long "witness-count"
       <> Opt.metavar "NATURAL"
       <> Opt.help "The number of Shelley key witnesses."
       )
 
-pTxByronWinessCount :: Parser TxByronWinessCount
-pTxByronWinessCount =
-  TxByronWinessCount <$>
+pTxByronWitnessCount :: Parser TxByronWitnessCount
+pTxByronWitnessCount =
+  TxByronWitnessCount <$>
     Opt.option Opt.auto
       (  Opt.long "byron-witness-count"
       <> Opt.metavar "NATURAL"
@@ -1284,8 +1443,8 @@ pStakeVerificationKeyFile =
     )
 
 
-pPoolStakingVerificationKeyFile :: Parser VerificationKeyFile
-pPoolStakingVerificationKeyFile =
+pPoolStakeVerificationKeyFile :: Parser VerificationKeyFile
+pPoolStakeVerificationKeyFile =
   VerificationKeyFile <$>
     (  Opt.strOption
          (  Opt.long "cold-verification-key-file"
@@ -1299,6 +1458,23 @@ pPoolStakingVerificationKeyFile =
          <> Opt.internal
          )
     )
+
+pStakePoolVerificationKeyHash :: Parser (Hash StakePoolKey)
+pStakePoolVerificationKeyHash =
+    Opt.option
+      (Opt.maybeReader spvkHash)
+        (  Opt.long "cold-verification-key-hash"
+        <> Opt.metavar "HASH"
+        <> Opt.help "Stake pool verification key hash (hex-encoded)."
+        )
+  where
+    spvkHash :: String -> Maybe (Hash StakePoolKey)
+    spvkHash = deserialiseFromRawBytesHex (AsHash AsStakePoolKey) . BSC.pack
+
+pStakePoolVerificationKeyHashOrFile :: Parser StakePoolVerificationKeyHashOrFile
+pStakePoolVerificationKeyHashOrFile =
+  StakePoolVerificationKeyFile <$> pPoolStakeVerificationKeyFile
+    <|> StakePoolVerificationKeyHash <$> pStakePoolVerificationKeyHash
 
 pVRFVerificationKeyFile :: Parser VerificationKeyFile
 pVRFVerificationKeyFile =
@@ -1479,7 +1655,7 @@ pStakePoolMetadataHash =
 pStakePoolRegistrationCert :: Parser PoolCmd
 pStakePoolRegistrationCert =
  PoolRegistrationCert
-  <$> pPoolStakingVerificationKeyFile
+  <$> pPoolStakeVerificationKeyFile
   <*> pVRFVerificationKeyFile
   <*> pPoolPledge
   <*> pPoolCost
@@ -1494,7 +1670,7 @@ pStakePoolRegistrationCert =
 pStakePoolRetirementCert :: Parser PoolCmd
 pStakePoolRetirementCert =
   PoolRetirementCert
-    <$> pPoolStakingVerificationKeyFile
+    <$> pPoolStakeVerificationKeyFile
     <*> pEpochNo
     <*> pOutputFile
 

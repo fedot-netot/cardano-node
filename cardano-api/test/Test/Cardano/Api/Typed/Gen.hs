@@ -20,7 +20,9 @@ import           Cardano.Prelude
 
 import           Control.Monad.Fail (fail)
 
+import qualified Cardano.Binary as CBOR
 import qualified Cardano.Crypto.Hash as Crypto
+import qualified Cardano.Crypto.Seed as Crypto
 import           Cardano.Slotting.Slot (SlotNo(..))
 import           Ouroboros.Network.Magic (NetworkMagic(..))
 
@@ -28,8 +30,6 @@ import           Hedgehog (Gen)
 import qualified Hedgehog.Gen as Gen
 import qualified Hedgehog.Range as Range
 
-import           Test.Cardano.Api.Gen (genSeed)
-import           Test.Cardano.Api.Orphans ()
 import           Test.Cardano.Chain.UTxO.Gen (genVKWitness)
 import           Test.Cardano.Crypto.Gen (genProtocolMagicId)
 
@@ -72,18 +72,25 @@ genOperationalCertificateIssueCounter = snd <$> genOperationalCertificateWithCou
 
 genOperationalCertificateWithCounter :: Gen (OperationalCertificate, OperationalCertificateIssueCounter)
 genOperationalCertificateWithCounter = do
-  kesVKey <- genVerificationKey AsKesKey
-  stakePoolSign <- genSigningKey AsStakePoolKey
-  kesP <- genKESPeriod
-  c <- Gen.integral $ Range.linear 0 1000
-  let stakePoolVer = getVerificationKey stakePoolSign
-      iCounter = OperationalCertificateIssueCounter c stakePoolVer
+    kesVKey <- genVerificationKey AsKesKey
+    stkPoolOrGenDelExtSign <- Gen.either (genSigningKey AsStakePoolKey) (genSigningKey AsGenesisDelegateExtendedKey)
+    kesP <- genKESPeriod
+    c <- Gen.integral $ Range.linear 0 1000
+    let stakePoolVer = either getVerificationKey (convert . getVerificationKey) stkPoolOrGenDelExtSign
+        iCounter = OperationalCertificateIssueCounter c stakePoolVer
 
-  case issueOperationalCertificate kesVKey stakePoolSign kesP iCounter of
-    -- This case should be impossible as we clearly derive the verification
-    -- key from the generated signing key.
-    Left err -> fail $ displayError err
-    Right pair -> return pair
+    case issueOperationalCertificate kesVKey stkPoolOrGenDelExtSign kesP iCounter of
+      -- This case should be impossible as we clearly derive the verification
+      -- key from the generated signing key.
+      Left err -> fail $ displayError err
+      Right pair -> return pair
+  where
+    convert :: VerificationKey GenesisDelegateExtendedKey
+            -> VerificationKey StakePoolKey
+    convert = (castVerificationKey :: VerificationKey GenesisDelegateKey
+                                   -> VerificationKey StakePoolKey)
+            . (castVerificationKey :: VerificationKey GenesisDelegateExtendedKey
+                                   -> VerificationKey GenesisDelegateKey)
 
 
 -- TODO: Generate payment credential via script
@@ -136,7 +143,7 @@ genShelleyTxOut =
   TxOut <$> genAddressShelley <*> genLovelace
 
 genShelleyHash :: Gen (Crypto.Hash Crypto.Blake2b_256 ())
-genShelleyHash = return $ Crypto.hash ()
+genShelleyHash = return $ Crypto.hashWith CBOR.serialize' ()
 
 genSlotNo :: Gen SlotNo
 genSlotNo = SlotNo <$> Gen.word64 Range.constantBounded
@@ -225,3 +232,6 @@ genShelleyWitnessSigningKey =
 genShelleyScriptWitness :: Gen (Witness Shelley)
 genShelleyScriptWitness = makeShelleyScriptWitness
 -}
+
+genSeed :: Int -> Gen Crypto.Seed
+genSeed n = Crypto.mkSeedFromBytes <$> Gen.bytes (Range.singleton n)

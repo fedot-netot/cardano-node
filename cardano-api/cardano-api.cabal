@@ -1,5 +1,5 @@
 name:                   cardano-api
-version:                1.15.1
+version:                1.16.0
 description:            The cardano api
 author:                 IOHK
 maintainer:             operations@iohk.io
@@ -14,8 +14,7 @@ extra-source-files:     README.md, ChangeLog.md
 library
   hs-source-dirs:       src
 
-  exposed-modules:      Cardano.Api
-                        Cardano.Api.Protocol
+  exposed-modules:      Cardano.Api.Protocol
                         Cardano.Api.Protocol.Types
                         Cardano.Api.Protocol.Byron
                         Cardano.Api.Protocol.Cardano
@@ -26,11 +25,8 @@ library
                         Cardano.Api.LocalChainSync
                         Cardano.Api.TxSubmit
 
-  other-modules:        Cardano.Api.Convert
-                        Cardano.Api.Error
-                        Cardano.Api.TxSubmit.ErrorRender
+  other-modules:        Cardano.Api.TxSubmit.ErrorRender
                         Cardano.Api.TxSubmit.Types
-                        Cardano.Api.Types
 
 
   build-depends:        base >=4.12 && <5
@@ -40,7 +36,7 @@ library
                       , base16-bytestring
                       , base58-bytestring
                       , base64
-                      , bech32
+                      , bech32 >= 1.1.0
                       , bytestring
                       , cardano-binary
                       , cardano-config
@@ -121,12 +117,9 @@ test-suite cardano-api-test
                       , shelley-spec-ledger-test
                       , time
 
-  other-modules:        Test.Cardano.Api
-                        Test.Cardano.Api.Convert
-                        Test.Cardano.Api.Examples
+  other-modules:        Test.Cardano.Api.Examples
                         Test.Cardano.Api.Gen
                         Test.Cardano.Api.Ledger
-                        Test.Cardano.Api.Orphans
                         Test.Cardano.Api.Typed.Bech32
                         Test.Cardano.Api.Typed.CBOR
                         Test.Cardano.Api.Typed.Envelope

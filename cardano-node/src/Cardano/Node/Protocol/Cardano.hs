@@ -24,6 +24,8 @@ import qualified Data.Text as T
 import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT)
 
+import qualified Cardano.Crypto.Hash.Class as Crypto
+
 import qualified Cardano.Chain.Update as Byron
 
 import           Ouroboros.Consensus.Cardano hiding (Protocol)
@@ -36,6 +38,7 @@ import           Ouroboros.Consensus.Cardano.Condense ()
 
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosStandardCrypto)
 import qualified Shelley.Spec.Ledger.PParams as Shelley
+import qualified Shelley.Spec.Ledger.BaseTypes as Shelley
 
 import           Cardano.Node.Types
                    (NodeByronProtocolConfiguration(..),
@@ -47,7 +50,6 @@ import           Cardano.Config.Types
 
 import           Cardano.TracingOrphanInstances.Byron ()
 import           Cardano.TracingOrphanInstances.Shelley ()
-import           Cardano.TracingOrphanInstances.HardFork ()
 
 import qualified Cardano.Node.Protocol.Byron as Byron
 import qualified Cardano.Node.Protocol.Shelley as Shelley
@@ -123,7 +125,8 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
                            }
                            NodeHardForkProtocolConfiguration {
                              npcTestShelleyHardForkAtEpoch,
-                             npcTestShelleyHardForkAtVersion
+                             npcTestShelleyHardForkAtVersion,
+                             npcShelleyHardForkNotBeforeEpoch
                            }
                            files = do
     byronGenesis <-
@@ -134,7 +137,7 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
       firstExceptT CardanoProtocolInstantiationErrorByron $
         Byron.readLeaderCredentials byronGenesis files
 
-    shelleyGenesis <-
+    (shelleyGenesis, shelleyGenesisHash) <-
       firstExceptT CardanoProtocolInstantiationErrorShelley $
         Shelley.readGenesis npcShelleyGenesisFile
 
@@ -156,15 +159,14 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
 
         -- Shelley parameters
         shelleyGenesis
-        initialNonce
+        (Shelley.Nonce (Crypto.castHash shelleyGenesisHash))
         (Shelley.ProtVer npcShelleySupportedProtocolVersionMajor
                          npcShelleySupportedProtocolVersionMinor)
         npcShelleyMaxSupportedProtocolVersion
         shelleyLeaderCredentials
 
         -- Hard fork parameters
-        (Just 190) --TODO: Optimisation: once the epoch of the transition is
-                   -- known, set this to the first shelley epoch.
+        npcShelleyHardForkNotBeforeEpoch
 
         -- What will trigger the hard fork?
         (case npcTestShelleyHardForkAtEpoch of
@@ -185,17 +187,6 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
            -- Alternatively, for testing we can transition at a specific epoch.
            --
            Just epochNo -> Consensus.TriggerHardForkAtEpoch epochNo)
-  where
-    -- The initial nonce, typically derived from the hash of Genesis config
-    -- JSON file.
-    --
-    -- WARNING: chains using different values of this parameter will be
-    -- mutually incompatible.
-    --
-    -- TODO: This should be replaced with the hash of the Shelley genesis
-    -- config JSON file, which should be taken as an argument/configuration
-    -- parameter.
-    initialNonce = NeutralNonce
 
 
 ------------------------------------------------------------------------------

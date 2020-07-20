@@ -1,4 +1,5 @@
 {-# LANGUAGE ConstraintKinds #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DeriveAnyClass #-}
@@ -18,6 +19,8 @@ module Cardano.Config.Types
     , GenesisFile (..)
     , KESMetricsData (..)
     , MaxKESEvolutions (..)
+    , MaxConcurrencyBulkSync (..)
+    , MaxConcurrencyDeadline (..)
     , OperationalCertStartKESPeriod (..)
     , HasKESMetricsData (..)
     , NodeAddress (..)
@@ -51,8 +54,9 @@ import           Ouroboros.Consensus.Block (Header, BlockProtocol, ForgeState(..
 import           Ouroboros.Consensus.Byron.Ledger.Block (ByronBlock)
 import           Ouroboros.Consensus.HeaderValidation (OtherHeaderEnvelopeError)
 import           Ouroboros.Consensus.Ledger.Abstract (LedgerError)
-import           Ouroboros.Consensus.Ledger.SupportsMempool (GenTxId, HasTxId, HasTxs(..),
-                   LedgerSupportsMempool(..))
+import           Ouroboros.Consensus.Ledger.Inspect (LedgerWarning)
+import           Ouroboros.Consensus.Ledger.SupportsMempool
+                   (GenTxId, HasTxId, HasTxs(..), ApplyTxErr)
 import           Ouroboros.Consensus.Mock.Ledger.Block (SimpleBlock)
 import           Ouroboros.Consensus.Protocol.Abstract (CannotLead, ValidationErr)
 import           Ouroboros.Consensus.Util.Condense (Condense (..))
@@ -60,10 +64,12 @@ import           Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock)
 import           Ouroboros.Consensus.Shelley.Ledger.Mempool (GenTx, TxId)
 import           Ouroboros.Consensus.Shelley.Protocol.Crypto.HotKey (HotKey (..))
 
+import           Ouroboros.Consensus.HardFork.Combinator
+import           Ouroboros.Consensus.HardFork.Combinator.Unary
+
 import           Ouroboros.Network.Block (HeaderHash)
 
 import           Cardano.Config.LedgerQueries
-import           Cardano.Config.Orphanage ()
 
 import           Shelley.Spec.Ledger.OCert (KESPeriod (..))
 
@@ -262,6 +268,23 @@ instance HasKESMetricsData ByronBlock where
 
 instance HasKESMetricsData (SimpleBlock a b) where
 
+instance (HasKESMetricsData x, NoHardForks x)
+      => HasKESMetricsData (HardForkBlock '[x]) where
+  getKESMetricsData forgeState =
+    getKESMetricsData (project forgeState)
+
+
+newtype MaxConcurrencyBulkSync = MaxConcurrencyBulkSync
+  { unMaxConcurrencyBulkSync :: Word }
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, Show)
+
+newtype MaxConcurrencyDeadline = MaxConcurrencyDeadline
+  { unMaxConcurrencyDeadline :: Word }
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, Show)
+
+
 -- | Tracing-related constraints for monitoring purposes.
 --
 -- When you need a 'Show' or 'Condense' instance for more types, just add the
@@ -289,6 +312,7 @@ type TraceConstraints blk =
     , ToObject (GenTx blk)
     , ToObject (Header blk)
     , ToObject (LedgerError blk)
+    , ToObject (LedgerWarning blk)
     , ToObject (OtherHeaderEnvelopeError blk)
     , ToObject (ValidationErr (BlockProtocol blk))
     , ToObject (CannotLead (BlockProtocol blk))

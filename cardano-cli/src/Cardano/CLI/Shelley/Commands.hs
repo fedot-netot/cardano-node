@@ -5,6 +5,7 @@ module Cardano.CLI.Shelley.Commands
     ShelleyCommand (..)
   , AddressCmd (..)
   , StakeAddressCmd (..)
+  , KeyCmd (..)
   , TransactionCmd (..)
   , NodeCmd (..)
   , PoolCmd (..)
@@ -17,19 +18,23 @@ module Cardano.CLI.Shelley.Commands
 
     -- * CLI flag types
   , AddressKeyType (..)
+  , ByronKeyType (..)
+  , ByronKeyFormat (..)
   , GenesisDir (..)
   , TxInCount (..)
   , TxOutCount (..)
-  , TxShelleyWinessCount (..)
-  , TxByronWinessCount (..)
-  , ITNKeyFile (..)
+  , TxShelleyWitnessCount (..)
+  , TxByronWitnessCount (..)
+  , SomeKeyFile (..)
   , OpCertCounterFile (..)
   , OutputFile (..)
   , ProtocolParamsFile (..)
   , SigningKeyFile (..)
+  , WitnessFile (..)
   , TxBodyFile (..)
   , TxFile (..)
   , VerificationKeyFile (..)
+  , VerificationKeyBase64 (..)
   , GenesisKeyFile (..)
   , MetaDataFile (..)
   , PoolId (..)
@@ -38,6 +43,7 @@ module Cardano.CLI.Shelley.Commands
   , PrivKeyFile (..)
   , BlockId (..)
   , QueryFilter (..)
+  , StakePoolVerificationKeyHashOrFile (..)
   ) where
 
 import           Prelude
@@ -45,7 +51,7 @@ import           Data.Set (Set)
 import           Data.Text (Text)
 
 import           Cardano.Api.Protocol (Protocol)
-import           Cardano.Api.Typed hiding (PoolId, Hash)
+import           Cardano.Api.Typed hiding (PoolId)
 
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
 
@@ -63,6 +69,7 @@ import           Shelley.Spec.Ledger.TxData (MIRPot)
 data ShelleyCommand
   = AddressCmd      AddressCmd
   | StakeAddressCmd StakeAddressCmd
+  | KeyCmd          KeyCmd
   | TransactionCmd  TransactionCmd
   | NodeCmd         NodeCmd
   | PoolCmd         PoolCmd
@@ -81,7 +88,6 @@ data AddressCmd
   | AddressBuild VerificationKeyFile (Maybe VerificationKeyFile) NetworkId (Maybe OutputFile)
   | AddressBuildMultiSig  --TODO
   | AddressInfo Text (Maybe OutputFile)
-  | AddressConvertKey SigningKeyFile SigningKeyFile
   deriving (Eq, Show)
 
 data StakeAddressCmd
@@ -92,11 +98,17 @@ data StakeAddressCmd
   | StakeKeyDelegate PrivKeyFile PoolId Lovelace NodeAddress
   | StakeKeyDeRegister PrivKeyFile NodeAddress
   | StakeKeyRegistrationCert VerificationKeyFile OutputFile
-  | StakeKeyDelegationCert VerificationKeyFile VerificationKeyFile OutputFile
+  | StakeKeyDelegationCert VerificationKeyFile StakePoolVerificationKeyHashOrFile OutputFile
   | StakeKeyDeRegistrationCert VerificationKeyFile OutputFile
-  | StakeKeyITNConversion ITNKeyFile (Maybe OutputFile)
   deriving (Eq, Show)
 
+data KeyCmd
+  = KeyGetVerificationKey SigningKeyFile VerificationKeyFile
+  | KeyNonExtendedKey  VerificationKeyFile VerificationKeyFile
+  | KeyConvertByronKey ByronKeyType SomeKeyFile OutputFile
+  | KeyConvertByronGenesisVKey VerificationKeyBase64 OutputFile
+  | KeyConvertITNStakeKey SomeKeyFile OutputFile
+  deriving (Eq, Show)
 
 data TransactionCmd
   = TxBuildRaw
@@ -110,8 +122,8 @@ data TransactionCmd
       (Maybe UpdateProposalFile)
       TxBodyFile
   | TxSign TxBodyFile [SigningKeyFile] (Maybe NetworkId) TxFile
-  | TxWitness       -- { transaction :: Transaction, key :: PrivKeyFile, nodeAddr :: NodeAddress }
-  | TxSignWitness   -- { transaction :: Transaction, witnesses :: [Witness], nodeAddr :: NodeAddress }
+  | TxWitness TxBodyFile SigningKeyFile (Maybe NetworkId) OutputFile
+  | TxSignWitness TxBodyFile [WitnessFile] OutputFile
   | TxCheck         -- { transaction :: Transaction, nodeAddr :: NodeAddress }
   | TxSubmit Protocol NetworkId FilePath
   | TxCalculateMinFee
@@ -120,8 +132,8 @@ data TransactionCmd
       ProtocolParamsFile
       TxInCount
       TxOutCount
-      TxShelleyWinessCount
-      TxByronWinessCount
+      TxShelleyWitnessCount
+      TxByronWitnessCount
   | TxGetTxId TxBodyFile
   deriving (Eq, Show)
 
@@ -131,6 +143,7 @@ data NodeCmd
   | NodeKeyGenKES  VerificationKeyFile SigningKeyFile
   | NodeKeyGenVRF  VerificationKeyFile SigningKeyFile
   | NodeKeyHashVRF  VerificationKeyFile (Maybe OutputFile)
+  | NodeNewCounter  VerificationKeyFile Word OpCertCounterFile
   | NodeIssueOpCert VerificationKeyFile SigningKeyFile OpCertCounterFile
                     KESPeriod OutputFile
   deriving (Eq, Show)
@@ -236,12 +249,12 @@ newtype TxOutCount
   = TxOutCount Int
   deriving (Eq, Show)
 
-newtype TxShelleyWinessCount
-  = TxShelleyWinessCount Int
+newtype TxShelleyWitnessCount
+  = TxShelleyWitnessCount Int
   deriving (Eq, Show)
 
-newtype TxByronWinessCount
-  = TxByronWinessCount Int
+newtype TxByronWitnessCount
+  = TxByronWitnessCount Int
   deriving (Eq, Show)
 
 newtype BlockId
@@ -277,9 +290,12 @@ newtype GenesisDir
   = GenesisDir FilePath
   deriving (Eq, Show)
 
-data ITNKeyFile
-  = ITNVerificationKeyFile VerificationKeyFile
-  | ITNSigningKeyFile SigningKeyFile
+-- | Either a verification or signing key, used for conversions and other
+-- commands that make sense for both.
+--
+data SomeKeyFile
+  = AVerificationKeyFile VerificationKeyFile
+  | ASigningKeyFile SigningKeyFile
   deriving (Eq, Show)
 
 data AddressKeyType
@@ -288,12 +304,26 @@ data AddressKeyType
   | AddressKeyByron
   deriving (Eq, Show)
 
+data ByronKeyType
+  = ByronPaymentKey  ByronKeyFormat
+  | ByronGenesisKey  ByronKeyFormat
+  | ByronDelegateKey ByronKeyFormat
+  deriving (Eq, Show)
+
+data ByronKeyFormat = NonLegacyByronKeyFormat
+                    | LegacyByronKeyFormat
+  deriving (Eq, Show)
+
 newtype OpCertCounterFile
   = OpCertCounterFile FilePath
   deriving (Eq, Show)
 
 newtype PrivKeyFile
   = PrivKeyFile FilePath
+  deriving (Eq, Show)
+
+newtype WitnessFile
+  = WitnessFile FilePath
   deriving (Eq, Show)
 
 newtype TxBodyFile
@@ -308,8 +338,19 @@ newtype VerificationKeyFile
   = VerificationKeyFile FilePath
   deriving (Eq, Show)
 
+-- | A raw verification key given in Base64, and decoded into a ByteString.
+newtype VerificationKeyBase64
+  = VerificationKeyBase64 String
+  deriving (Eq, Show)
+
 -- | UTxO query filtering options.
 data QueryFilter
   = FilterByAddress !(Set (Address Shelley))
   | NoFilter
+  deriving (Eq, Show)
+
+-- | Either a stake pool verification key hash or verification key file.
+data StakePoolVerificationKeyHashOrFile
+  = StakePoolVerificationKeyHash !(Hash StakePoolKey)
+  | StakePoolVerificationKeyFile !VerificationKeyFile
   deriving (Eq, Show)
