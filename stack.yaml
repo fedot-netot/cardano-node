@@ -67,6 +67,7 @@ extra-deps:
     subdirs:
       # small-steps
       - semantics/executable-spec
+      - semantics/small-steps-test
       # cs-ledger
       - byron/ledger/executable-spec
       - byron/ledger/impl
