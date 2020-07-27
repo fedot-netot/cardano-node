@@ -1,5 +1,7 @@
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 {-# OPTIONS_GHC -Wno-orphans  #-}
 
@@ -20,33 +22,33 @@ module Cardano.Node.Protocol.Cardano
 
 import           Prelude
 
+import           Data.SOP.Strict (NP ((:*), Nil))
 import qualified Data.Text as T
 import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT)
 
-import qualified Cardano.Crypto.Hash.Class as Crypto
-
 import qualified Cardano.Chain.Update as Byron
 
+import           Ouroboros.Consensus.Block (ForgeState)
 import           Ouroboros.Consensus.Cardano hiding (Protocol)
 import qualified Ouroboros.Consensus.Cardano as Consensus
 import qualified Ouroboros.Consensus.Cardano.CanHardFork as Consensus
 import           Ouroboros.Consensus.HardFork.Combinator.Condense ()
+import           Ouroboros.Consensus.HardFork.Combinator.Forge (distribForgeState)
 
 import           Ouroboros.Consensus.Cardano.Block (CardanoBlock)
 import           Ouroboros.Consensus.Cardano.Condense ()
 
+import           Ouroboros.Consensus.Shelley.Ledger.Block (ShelleyBlock)
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosStandardCrypto)
 import qualified Shelley.Spec.Ledger.PParams as Shelley
-import qualified Shelley.Spec.Ledger.BaseTypes as Shelley
 
 import           Cardano.Node.Types
                    (NodeByronProtocolConfiguration(..),
                     NodeShelleyProtocolConfiguration(..),
                     NodeHardForkProtocolConfiguration(..))
 import           Cardano.Config.Types
-                   (ProtocolFilepaths(..), HasKESMetricsData(..),
-                    KESMetricsData(..))
+                   (ProtocolFilepaths(..), HasKESMetricsData(..))
 
 import           Cardano.TracingOrphanInstances.Byron ()
 import           Cardano.TracingOrphanInstances.Shelley ()
@@ -60,10 +62,14 @@ import           Cardano.Node.Protocol.Types
 
 --TODO: move ToObject tracing instances to Cardano.TracingOrphanInstances.Consensus
 --      and do them generically for the hard fork combinator
-instance HasKESMetricsData (CardanoBlock c) where
-    getKESMetricsData _forgeState = NoKESMetricsData
-    --TODO distinguish on the era and use getKESMetricsData on the appropriate era
+instance forall c. HasKESMetricsData (CardanoBlock c) where
+  getKESMetricsData cardanoForgeState =
+    let (_byronForgeState :* shelleyForgeState :* Nil) = distribForgeState cardanoForgeState
+     in getKESMetricsData (shelleyForgeState :: ForgeState (ShelleyBlock c))
 
+-- TODO: Ideally, we would like to distinguish here between whether we are in
+-- the Byron or Shelley era, but that's currently not possible to determine
+-- from the ForgeState alone.
 
 ------------------------------------------------------------------------------
 -- Real Cardano protocol
@@ -109,6 +115,7 @@ mkConsensusProtocolCardano
                                     ProtocolCardano)
 mkConsensusProtocolCardano NodeByronProtocolConfiguration {
                              npcByronGenesisFile,
+                             npcByronGenesisFileHash,
                              npcByronReqNetworkMagic,
                              npcByronPbftSignatureThresh,
                              npcByronApplicationName,
@@ -119,6 +126,7 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
                            }
                            NodeShelleyProtocolConfiguration {
                              npcShelleyGenesisFile,
+                             npcShelleyGenesisFileHash,
                              npcShelleySupportedProtocolVersionMajor,
                              npcShelleySupportedProtocolVersionMinor,
                              npcShelleyMaxSupportedProtocolVersion
@@ -131,7 +139,9 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
                            files = do
     byronGenesis <-
       firstExceptT CardanoProtocolInstantiationErrorByron $
-        Byron.readGenesis npcByronGenesisFile npcByronReqNetworkMagic
+        Byron.readGenesis npcByronGenesisFile
+                          npcByronGenesisFileHash
+                          npcByronReqNetworkMagic
 
     byronLeaderCredentials <-
       firstExceptT CardanoProtocolInstantiationErrorByron $
@@ -140,6 +150,7 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
     (shelleyGenesis, shelleyGenesisHash) <-
       firstExceptT CardanoProtocolInstantiationErrorShelley $
         Shelley.readGenesis npcShelleyGenesisFile
+                            npcShelleyGenesisFileHash
 
     shelleyLeaderCredentials <-
       firstExceptT CardanoProtocolInstantiationErrorShelley $
@@ -159,7 +170,7 @@ mkConsensusProtocolCardano NodeByronProtocolConfiguration {
 
         -- Shelley parameters
         shelleyGenesis
-        (Shelley.Nonce (Crypto.castHash shelleyGenesisHash))
+        (Shelley.genesisHashToPraosNonce shelleyGenesisHash)
         (Shelley.ProtVer npcShelleySupportedProtocolVersionMajor
                          npcShelleySupportedProtocolVersionMinor)
         npcShelleyMaxSupportedProtocolVersion

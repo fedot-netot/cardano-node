@@ -78,9 +78,9 @@ let
   };
   extraBuilds = {
     # only build nixos tests on first supported system (linux)
-    inherit (pkgsFor (builtins.head  supportedSystems)) nixosTests;
+    inherit (pkgsFor (builtins.head  supportedSystems));
     # Environments listed in Network Configuration page
-    cardano-deployment = pkgs.iohkNix.cardanoLib.mkConfigHtml { inherit (pkgs.iohkNix.cardanoLib.environments) mainnet testnet shelley_testnet mainnet_candidate; };
+    cardano-deployment = pkgs.iohkNix.cardanoLib.mkConfigHtml { inherit (pkgs.iohkNix.cardanoLib.environments) mainnet testnet shelley_testnet mainnet_candidate mainnet_candidate_2 mainnet_candidate_3; };
   } // (builtins.listToAttrs (map makeRelease [
     # Environments we want to build scripts for on hydra
     "mainnet"
@@ -143,7 +143,6 @@ let
       (optional windowsBuild jobs.cardano-node-win64)
       (optionals windowsBuild (collectJobs jobs.${mingwW64.config}.checks))
       (map (cluster: collectJobs jobs.${cluster}.scripts.node.${head supportedSystems}) [ "mainnet" "testnet" "staging" "shelley_qa" "shelley_testnet" ])
-      (collectJobs jobs.nixosTests.chairmansCluster)
       [
         jobs.cardano-node-linux
         jobs.cardano-node-macos
