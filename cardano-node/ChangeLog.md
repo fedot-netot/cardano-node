@@ -1,5 +1,65 @@
 # Changelog for cardano-node
 
+## 1.18.0 -- July 2020
+
+### node changes
+- Properly display tx hash in Shelley UTxO query command output (#1535)
+- Documentation improvements (#1533, #1534, #1536, #1537)
+- Minor changes to test cases (#1538, #1541)
+- Changes to genesis file and NIX setup (#1531, #1532)
+
+### consensus changes
+- Account for encoding overhead of Shelley transactions (#2466)
+- Optimise translating Byron to Shelley UTxOs (#2464)
+- Improve error reporting (#2458)
+- Tune defaultDiskPolicy (#2454)
+
+### ledger changes
+- Changed the expected block count to account for the decentralisation parameter (#111)
+- Replace dependency on lens with microlens (#1705)
+- Fix typo in CDDL key name (#1706)
+- Enable more efficient  transaction translations (#1708)
+
+### network changes
+- Reduce default block fetch concurrency deadline to 1 (#2457)
+- Update dependencies with the ledger (#2456)
+
+
+## 1.17.0 -- July 2020
+
+### node changes
+- Fix KES metric reporting in the Cardano mode (#1448, #1505)
+- Fix rendering of block hashes in logging output (#1488)
+- Trace hard fork transition events (#1520)
+- Script for setting up a local cluster in Cardano mode (#1487)
+- Documentation reorganisation (#1490, #1491, #1508)
+
+### consensus changes
+- Trace hard fork transition events (#2449)
+- Refactor HFC serialisation and fix a bug in the serialisation for the
+  Shelley-only era  (#2239, #2435)
+- Initial infrastructure for supporting old transactions in new eras, for
+  future hard forks (#2371, #2431)
+- Add extra long-running nightly CI tests (#2393, #2398)
+
+### ledger changes
+- Unclaimed rewards go back to reserves, not the treasury (#1703)
+- Fix an accidental change to the delegation update rule arising from previous
+  optimisation work (#1701)
+- Fix serialisation of protocol state to be valid CBOR (#1684)
+- Memory use optimisations (#1678, #1683)
+- Improve performance of a particular calculation in the rules (#1700)
+- Improve clarity between executable and formal spec, arising from audit
+  feedback (#1685, #1687, #1690, #1694)
+- Remove stkCreds and stpools maps from formal spec, in line with
+  simplifications from the executable specification (#1692)
+
+### network changes
+- Infrastructure for showing the type of protocols in errors (#2419)
+- Adjust the local state query wrapper type as needed by db-sync (#2437)
+- New tip-sampling mini-protocol for later use in P2P governor (#2340)
+- Block fetch improvements (#2430, #2433, #2434, #2441, #2451)
+
 ## 1.16.0 -- July 2020
 
 ### node changes

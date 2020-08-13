@@ -5,7 +5,7 @@ module Test.CLI.Shelley.Golden.Genesis.Create
   ( golden_shelleyGenesisCreate
   ) where
 
-import Cardano.Prelude hiding (to)
+import Cardano.Prelude
 
 import Prelude(String)
 
@@ -81,9 +81,10 @@ parseTotalSupply = J.withObject "Object" $ \ o -> do
 golden_shelleyGenesisCreate :: Property
 golden_shelleyGenesisCreate = OP.propertyOnce $ do
   OP.workspace "tmp/genesis-create" $ \tempDir -> do
-    let sourceGenesisSpecFile = "test/Test/golden/shelley/genesis/genesis.spec.json"
+    sourceGenesisSpecFile <- OP.noteInputFile "test/Test/golden/shelley/genesis/genesis.spec.json"
+    genesisSpecFile <- OP.noteTempFile tempDir "genesis.spec.json"
 
-    liftIO $ IO.copyFile sourceGenesisSpecFile (tempDir <> "/genesis.spec.json")
+    liftIO $ IO.copyFile sourceGenesisSpecFile genesisSpecFile
 
     let genesisFile = tempDir <> "/genesis.json"
 
@@ -94,7 +95,7 @@ golden_shelleyGenesisCreate = OP.propertyOnce $ do
     (utxoCount, fmtUtxoCount) <- fmap (withSnd show) $ forAll $ G.int (R.linear 4 19)
 
     -- Create the genesis json file and required keys
-    void $ liftIO $ OP.execCardanoCLI
+    void $ OP.execCardanoCLI
         [ "shelley","genesis","create"
         , "--testnet-magic", "12"
         , "--start-time", fmtStartTime
@@ -154,7 +155,7 @@ golden_shelleyGenesisCreate = OP.propertyOnce $ do
     (utxoCount, fmtUtxoCount) <- fmap (withSnd show) $ forAll $ G.int (R.linear 4 19)
 
     -- Create the genesis json file and required keys
-    void $ liftIO $ OP.execCardanoCLI
+    void $ OP.execCardanoCLI
         [ "shelley","genesis","create"
         , "--testnet-magic", "12"
         , "--start-time", fmtStartTime

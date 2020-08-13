@@ -1,5 +1,5 @@
 name:                  cardano-cli
-version:               1.16.0
+version:               1.18.0
 description:           The Cardano command-line interface.
 author:                IOHK
 maintainer:            operations@iohk.io
@@ -210,7 +210,15 @@ test-suite cardano-cli-pioneers
                         Test.CLI.Shelley.Golden.Genesis.KeyGenGenesis
                         Test.CLI.Shelley.Golden.Genesis.KeyGenUtxo
                         Test.CLI.Shelley.Golden.Genesis.KeyHash
+                        Test.CLI.Shelley.Golden.Node.IssueOpCert
+                        Test.CLI.Shelley.Golden.Node.KeyGen
+                        Test.CLI.Shelley.Golden.Node.KeyGenKes
+                        Test.CLI.Shelley.Golden.Node.KeyGenVrf
                         Test.CLI.Shelley.Golden.Metadata.StakePoolMetadata
+                        Test.CLI.Shelley.Golden.StakeAddress.Build
+                        Test.CLI.Shelley.Golden.StakeAddress.DeregistrationCertificate
+                        Test.CLI.Shelley.Golden.StakeAddress.KeyGen
+                        Test.CLI.Shelley.Golden.StakeAddress.RegistrationCertificate
                         Test.CLI.Shelley.Golden.TextEnvelope.Certificates.MIRCertificate
                         Test.CLI.Shelley.Golden.TextEnvelope.Certificates.OperationalCertificate
                         Test.CLI.Shelley.Golden.TextEnvelope.Certificates.StakeAddressCertificates
