@@ -3,25 +3,25 @@
 {-# LANGUAGE RankNTypes #-}
 
 import           Cardano.Prelude hiding (option)
-import           Prelude (String)
 import qualified Data.Text as Text
+import           Prelude (String)
 
 import           Data.Semigroup ((<>))
-import           Options.Applicative (Parser)
+import           Options.Applicative
 import qualified Options.Applicative as Opt
+import           Options.Applicative.Help ((<$$>))
 
+import           Cardano.Config.Git.Rev (gitRev)
 import           Data.Version (showVersion)
 import           Paths_cardano_node (version)
 import           System.Info (arch, compilerName, compilerVersion, os)
-import           Cardano.Config.GitRev (gitRev)
 
-import           Cardano.Common.Help
-import           Cardano.Config.TopHandler
-import           Cardano.Config.Parsers
-import           Cardano.Node.Logging (createLoggingLayer)
-import           Cardano.Node.Parsers (nodeCLIParser)
+import           Cardano.Node.Configuration.Logging (createLoggingLayer)
+import           Cardano.Node.Handlers.TopLevel
+import           Cardano.Node.Parsers (nodeCLIParser, parserHelpHeader, parserHelpOptions,
+                     renderHelpDoc)
 import           Cardano.Node.Run (runNode)
-import           Cardano.Node.Types (NodeCLI(..))
+import           Cardano.Node.Types (NodeCLI (..))
 
 main :: IO ()
 main = toplevelExceptionHandler $ do
@@ -103,3 +103,8 @@ runRunCommand npm = do
                     Right res -> return res
 
   liftIO $ runNode loggingLayer npm
+
+command' :: String -> String -> Parser a -> Mod CommandFields a
+command' c descr p =
+    command c $ info (p <**> helper)
+              $ mconcat [ progDesc descr ]

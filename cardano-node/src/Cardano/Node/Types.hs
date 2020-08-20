@@ -1,23 +1,27 @@
-{-# LANGUAGE DeriveAnyClass     #-}
-{-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralisedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE StandaloneDeriving #-}
 
 module Cardano.Node.Types
-  ( ConfigYamlFilePath(..)
+  ( ConfigError(..)
+  , ConfigYamlFilePath(..)
+  , DbFile(..)
+  , GenesisFile(..)
   , NodeCLI(..)
   , NodeConfiguration(..)
-  , Protocol(..)
-  , MockProtocol(..)
+  , ProtocolFilepaths (..)
   , GenesisHash(..)
+  , MaxConcurrencyBulkSync(..)
+  , MaxConcurrencyDeadline(..)
+  , NodeAddress(..)
+  , NodeHostAddress (..)
   , NodeByronProtocolConfiguration(..)
   , NodeHardForkProtocolConfiguration(..)
   , NodeProtocolConfiguration(..)
   , NodeShelleyProtocolConfiguration(..)
-  , NodeMockProtocolConfiguration(..)
-  , TraceOptions(..)
+  , SocketPath(..)
+  , TopologyFile(..)
+  , ViewMode(..)
   , ncProtocol
   , parseNodeConfiguration
   , parseNodeConfigurationFP
@@ -27,23 +31,30 @@ module Cardano.Node.Types
 import           Cardano.Prelude
 import           Prelude (String)
 
-import           Control.Monad.Fail (fail)
+import           Control.Monad (fail)
 import           Data.Aeson
+import           Data.IP (IP)
+import qualified Data.Text as Text
 import           Data.Yaml (decodeFileThrow)
-import           System.FilePath ((</>), takeDirectory)
+import           Network.Socket (PortNumber)
+import           System.FilePath (takeDirectory, (</>))
 import           System.Posix.Types (Fd)
 
 import           Cardano.Api.Typed (EpochNo)
-import           Cardano.Config.Types
-import qualified Cardano.Crypto.Hash as Crypto
-import           Cardano.Crypto (RequiresNetworkMagic(..))
 import qualified Cardano.Chain.Update as Byron
-import           Cardano.Node.TraceConfig (TraceOptions(..), traceConfigParser)
-import           Ouroboros.Network.Block (MaxSlotNo(..))
-import           Ouroboros.Consensus.NodeId (CoreNodeId(..))
+import           Cardano.Crypto (RequiresNetworkMagic (..))
+import qualified Cardano.Crypto.Hash as Crypto
+import           Cardano.Node.Protocol.Types (Protocol (..))
+import           Cardano.Tracing.Config (TraceOptions (..), traceConfigParser)
+import           Ouroboros.Network.Block (MaxSlotNo (..))
 
 --TODO: things will probably be clearer if we don't use these newtype wrappers and instead
 -- use records with named fields in the CLI code.
+
+-- | Errors for the cardano-config module.
+data ConfigError
+    = ConfigErrorFileNotFound !FilePath
+    deriving Show
 
 -- | Filepath of the configuration yaml file. This file determines
 -- all the configuration settings required for the cardano node
@@ -52,9 +63,90 @@ newtype ConfigYamlFilePath = ConfigYamlFilePath
   { unConfigPath :: FilePath }
   deriving newtype (Eq, Show)
 
+newtype DbFile = DbFile
+  { unDB :: FilePath }
+  deriving newtype Show
+
+newtype GenesisFile = GenesisFile
+  { unGenesisFile :: FilePath }
+  deriving stock (Eq, Ord)
+  deriving newtype (IsString, Show)
+
+instance FromJSON GenesisFile where
+  parseJSON (String genFp) = pure . GenesisFile $ Text.unpack genFp
+  parseJSON invalid = panic $ "Parsing of GenesisFile failed due to type mismatch. "
+                           <> "Encountered: " <> (Text.pack $ show invalid)
+
+-- Node can be run in two modes.
+data ViewMode = LiveView    -- Live mode with TUI
+              | SimpleView  -- Simple mode, just output text.
+              deriving (Eq, Show)
+
+instance FromJSON ViewMode where
+  parseJSON (String str) = case str of
+                            "LiveView" -> pure LiveView
+                            "SimpleView" -> pure SimpleView
+                            view -> panic $ "Parsing of ViewMode: "
+                                          <> view <> " failed. "
+                                          <> view <> " is not a valid view mode"
+  parseJSON invalid = panic $ "Parsing of ViewMode failed due to type mismatch. "
+                            <> "Encountered: " <> (Text.pack $ show invalid)
+
+newtype MaxConcurrencyBulkSync = MaxConcurrencyBulkSync
+  { unMaxConcurrencyBulkSync :: Word }
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, Show)
+
+newtype MaxConcurrencyDeadline = MaxConcurrencyDeadline
+  { unMaxConcurrencyDeadline :: Word }
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, Show)
+
+
+-- | IPv4 address with a port number.
+data NodeAddress = NodeAddress
+  { naHostAddress :: !NodeHostAddress
+  , naPort :: !PortNumber
+  } deriving (Eq, Ord, Show)
+
+instance FromJSON NodeAddress where
+  parseJSON = withObject "NodeAddress" $ \v -> do
+    NodeAddress
+      <$> v .: "addr"
+      <*> ((fromIntegral :: Int -> PortNumber) <$> v .: "port")
+
+instance ToJSON NodeAddress where
+  toJSON na =
+    object
+      [ "addr" .= toJSON (naHostAddress na)
+      , "port" .= (fromIntegral (naPort na) :: Int)
+      ]
+
+-- Embedding a Maybe inside a newtype is somewhat icky but this seems to work
+-- and removing the Maybe breaks the functionality in a subtle way that is difficult
+-- to diagnose.
+newtype NodeHostAddress
+  = NodeHostAddress { unNodeHostAddress :: Maybe IP }
+  deriving newtype Show
+  deriving (Eq, Ord)
+
+instance FromJSON NodeHostAddress where
+  parseJSON (String ipStr) =
+    case readMaybe $ Text.unpack ipStr of
+      Just ip -> pure $ NodeHostAddress (Just ip)
+      Nothing -> panic $ "Parsing of IP failed: " <> ipStr
+  parseJSON Null = pure $ NodeHostAddress Nothing
+  parseJSON invalid = panic $ "Parsing of IP failed due to type mismatch. "
+                            <> "Encountered: " <> (Text.pack $ show invalid) <> "\n"
+
+instance ToJSON NodeHostAddress where
+  toJSON mha =
+    case unNodeHostAddress mha of
+      Just ip -> String (Text.pack $ show ip)
+      Nothing -> Null
+
 data NodeCLI = NodeCLI
-  { nodeMode        :: !NodeProtocolMode
-  , nodeAddr        :: !(Maybe NodeAddress)
+  { nodeAddr        :: !(Maybe NodeAddress)
     -- | Filepath of the configuration yaml file. This file determines
     -- all the configuration settings required for the cardano node
     -- (logging, tracing, protocol, slot length etc)
@@ -123,9 +215,6 @@ instance FromJSON NodeConfiguration where
       protocol <- v .: "Protocol" .!= ByronProtocol
       ncProtocolConfig <-
         case protocol of
-          MockProtocol ptcl ->
-            NodeProtocolConfigurationMock <$> parseMockProtocol ptcl v
-
           ByronProtocol ->
             NodeProtocolConfigurationByron <$> parseByronProtocol v
 
@@ -147,15 +236,6 @@ instance FromJSON NodeConfiguration where
            , ncTraceConfig
            }
     where
-      parseMockProtocol npcMockProtocol v = do
-        npcMockNodeId       <- v .: "NodeId"
-        npcMockNumCoreNodes <- v .: "NumCoreNodes"
-        pure NodeMockProtocolConfiguration {
-               npcMockProtocol
-             , npcMockNodeId
-             , npcMockNumCoreNodes
-             }
-
       parseByronProtocol v = do
         primary   <- v .:? "ByronGenesisFile"
         secondary <- v .:? "GenesisFile"
@@ -227,51 +307,20 @@ instance FromJSON NodeConfiguration where
                npcShelleyHardForkNotBeforeEpoch
              }
 
-data Protocol = MockProtocol !MockProtocol
-              | ByronProtocol
-              | ShelleyProtocol
-              | CardanoProtocol
-  deriving (Eq, Show, Generic)
-
-instance FromJSON Protocol where
-  parseJSON =
-    withText "Protocol" $ \str -> case str of
-
-      -- The new names
-      "MockBFT"   -> pure (MockProtocol MockBFT)
-      "MockPBFT"  -> pure (MockProtocol MockPBFT)
-      "MockPraos" -> pure (MockProtocol MockPraos)
-      "Byron"     -> pure ByronProtocol
-      "Shelley"   -> pure ShelleyProtocol
-      "Cardano"   -> pure CardanoProtocol
-
-      -- The old names
-      "BFT"       -> pure (MockProtocol MockBFT)
-    --"MockPBFT"  -- same as new name
-      "Praos"     -> pure (MockProtocol MockPraos)
-      "RealPBFT"  -> pure ByronProtocol
-      "TPraos"    -> pure ShelleyProtocol
-
-      _           -> fail $ "Parsing of Protocol failed. "
-                         <> show str <> " is not a valid protocol"
-
-deriving instance NFData Protocol
-deriving instance NoUnexpectedThunks Protocol
-
-data MockProtocol = MockBFT
-                  | MockPBFT
-                  | MockPraos
-  deriving (Eq, Show, Generic)
-
-deriving instance NFData MockProtocol
-deriving instance NoUnexpectedThunks MockProtocol
+data ProtocolFilepaths =
+     ProtocolFilepaths {
+       byronCertFile   :: !(Maybe FilePath)
+     , byronKeyFile    :: !(Maybe FilePath)
+     , shelleyKESFile  :: !(Maybe FilePath)
+     , shelleyVRFFile  :: !(Maybe FilePath)
+     , shelleyCertFile :: !(Maybe FilePath)
+     }
 
 newtype GenesisHash = GenesisHash (Crypto.Hash Crypto.Blake2b_256 ByteString)
   deriving newtype (Eq, Show, ToJSON, FromJSON)
 
 data NodeProtocolConfiguration =
-       NodeProtocolConfigurationMock    NodeMockProtocolConfiguration
-     | NodeProtocolConfigurationByron   NodeByronProtocolConfiguration
+       NodeProtocolConfigurationByron   NodeByronProtocolConfiguration
      | NodeProtocolConfigurationShelley NodeShelleyProtocolConfiguration
      | NodeProtocolConfigurationCardano NodeByronProtocolConfiguration
                                         NodeShelleyProtocolConfiguration
@@ -326,14 +375,6 @@ data NodeByronProtocolConfiguration =
      }
   deriving Show
 
-data NodeMockProtocolConfiguration =
-     NodeMockProtocolConfiguration {
-       npcMockProtocol     :: MockProtocol
-     , npcMockNodeId       :: CoreNodeId
-     , npcMockNumCoreNodes :: Word64
-     }
-  deriving Show
-
 -- | Configuration relating to a hard forks themselves, not the specific eras.
 --
 data NodeHardForkProtocolConfiguration =
@@ -365,10 +406,16 @@ data NodeHardForkProtocolConfiguration =
      }
   deriving Show
 
-instance AdjustFilePaths NodeProtocolConfiguration where
+newtype SocketPath = SocketPath
+  { unSocketPath :: FilePath }
+  deriving stock (Eq, Ord)
+  deriving newtype (FromJSON, IsString, Show)
 
-  adjustFilePaths f (NodeProtocolConfigurationMock pc) =
-    NodeProtocolConfigurationMock (adjustFilePaths f pc)
+newtype TopologyFile = TopologyFile
+  { unTopology :: FilePath }
+  deriving newtype Show
+
+instance AdjustFilePaths NodeProtocolConfiguration where
 
   adjustFilePaths f (NodeProtocolConfigurationByron pc) =
     NodeProtocolConfigurationByron (adjustFilePaths f pc)
@@ -380,10 +427,6 @@ instance AdjustFilePaths NodeProtocolConfiguration where
     NodeProtocolConfigurationCardano (adjustFilePaths f pcb)
                                      (adjustFilePaths f pcs)
                                      pch
-
-
-instance AdjustFilePaths NodeMockProtocolConfiguration where
-  adjustFilePaths _f x = x -- Contains no file paths
 
 instance AdjustFilePaths NodeByronProtocolConfiguration where
   adjustFilePaths f x@NodeByronProtocolConfiguration {
@@ -409,7 +452,6 @@ instance AdjustFilePaths a => AdjustFilePaths (Maybe a) where
 ncProtocol :: NodeConfiguration -> Protocol
 ncProtocol nc =
     case ncProtocolConfig nc of
-      NodeProtocolConfigurationMock npc  -> MockProtocol (npcMockProtocol npc)
       NodeProtocolConfigurationByron{}   -> ByronProtocol
       NodeProtocolConfigurationShelley{} -> ShelleyProtocol
       NodeProtocolConfigurationCardano{} -> CardanoProtocol
@@ -426,9 +468,6 @@ parseNodeConfigurationFP (ConfigYamlFilePath fp) = do
 -- | A human readable name for the protocol
 --
 protocolName :: Protocol -> String
-protocolName (MockProtocol MockBFT)   = "Mock BFT"
-protocolName (MockProtocol MockPBFT)  = "Mock PBFT"
-protocolName (MockProtocol MockPraos) = "Mock Praos"
-protocolName  ByronProtocol           = "Byron"
-protocolName  ShelleyProtocol         = "Shelley"
-protocolName  CardanoProtocol         = "Byron; Shelley"
+protocolName ByronProtocol   = "Byron"
+protocolName ShelleyProtocol = "Shelley"
+protocolName CardanoProtocol = "Byron; Shelley"

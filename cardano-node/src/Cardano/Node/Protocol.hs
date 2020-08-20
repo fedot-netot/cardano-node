@@ -12,15 +12,12 @@ import           Cardano.Prelude
 import           Control.Monad.Trans.Except (ExceptT)
 import           Control.Monad.Trans.Except.Extra (firstExceptT)
 
-import           Cardano.Node.Types (NodeConfiguration(..), NodeProtocolConfiguration(..),
-                    NodeMockProtocolConfiguration(..), MockProtocol(..))
-import           Cardano.Config.Types (ProtocolFilepaths(..))
+import           Cardano.Node.Types
 
-import           Cardano.Node.Protocol.Types (SomeConsensusProtocol(..))
-import           Cardano.Node.Protocol.Mock
 import           Cardano.Node.Protocol.Byron
-import           Cardano.Node.Protocol.Shelley
 import           Cardano.Node.Protocol.Cardano
+import           Cardano.Node.Protocol.Shelley
+import           Cardano.Node.Protocol.Types (SomeConsensusProtocol (..))
 
 ------------------------------------------------------------------------------
 -- Conversions from configuration into specific protocols and their params
@@ -33,14 +30,6 @@ mkConsensusProtocol
 mkConsensusProtocol NodeConfiguration{ncProtocolConfig} files =
     case ncProtocolConfig of
 
-      -- Mock protocols
-      NodeProtocolConfigurationMock config ->
-        case npcMockProtocol config of
-          MockBFT   -> pure $ mkSomeConsensusProtocolMockBFT   config
-          MockPBFT  -> pure $ mkSomeConsensusProtocolMockPBFT  config
-          MockPraos -> pure $ mkSomeConsensusProtocolMockPraos config
-
-      -- Real protocols
       NodeProtocolConfigurationByron config ->
         firstExceptT ByronProtocolInstantiationError $
           mkSomeConsensusProtocolByron config files

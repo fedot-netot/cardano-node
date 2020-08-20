@@ -12,14 +12,13 @@ import           Data.Aeson (encode)
 
 import qualified Data.ByteString.Lazy.Char8 as LBS
 
-import           Shelley.Spec.Ledger.Address (serialiseAddr, deserialiseAddr)
+import           Shelley.Spec.Ledger.Address (deserialiseAddr, serialiseAddr)
 
 import           Hedgehog (Property, discover)
 import qualified Hedgehog
 
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosStandardCrypto)
 
-import qualified Test.Shelley.Spec.Ledger.Serialisation.Tripping.JSON as Ledger
 import           Test.Shelley.Spec.Ledger.Serialisation.Generators.Genesis (genAddress)
 
 import           Test.Cardano.Api.Examples
@@ -38,23 +37,6 @@ prop_roundtrip_Address_CBOR =
   Hedgehog.property $ do
     addr <- Hedgehog.forAll (genAddress @TPraosStandardCrypto)
     Hedgehog.tripping addr serialiseAddr deserialiseAddr
-
--- If this fails, FundPair and ShelleyGenesis can also fail.
-prop_roundtrip_Address_JSON :: Property
-prop_roundtrip_Address_JSON =
-  Ledger.prop_roundtrip_Address_JSON @TPraosStandardCrypto Proxy
-
-prop_roundtrip_GenesisDelegationPair_JSON :: Property
-prop_roundtrip_GenesisDelegationPair_JSON =
-  Ledger.prop_roundtrip_GenesisDelegationPair_JSON @TPraosStandardCrypto Proxy
-
-prop_roundtrip_FundPair_JSON :: Property
-prop_roundtrip_FundPair_JSON =
-  Ledger.prop_roundtrip_FundPair_JSON @TPraosStandardCrypto Proxy
-
-prop_roundtrip_ShelleyGenesis_JSON :: Property
-prop_roundtrip_ShelleyGenesis_JSON =
-  Ledger.prop_roundtrip_ShelleyGenesis_JSON @TPraosStandardCrypto Proxy
 
 -- -----------------------------------------------------------------------------
 

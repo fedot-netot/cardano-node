@@ -2,6 +2,9 @@ module Test.Cardano.Api.Typed.Gen
   ( genAddressByron
   , genAddressShelley
   , genByronKeyWitness
+  , genRequiredSig
+  , genMofNRequiredSig
+  , genMultiSigScript
   , genOperationalCertificate
   , genOperationalCertificateIssueCounter
   , genShelleyWitness
@@ -23,8 +26,8 @@ import           Control.Monad.Fail (fail)
 import qualified Cardano.Binary as CBOR
 import qualified Cardano.Crypto.Hash as Crypto
 import qualified Cardano.Crypto.Seed as Crypto
-import           Cardano.Slotting.Slot (SlotNo(..))
-import           Ouroboros.Network.Magic (NetworkMagic(..))
+import           Cardano.Slotting.Slot (SlotNo (..))
+import           Ouroboros.Network.Magic (NetworkMagic (..))
 
 import           Hedgehog (Gen)
 import qualified Hedgehog.Gen as Gen
@@ -53,6 +56,29 @@ genKESPeriod = KESPeriod <$> Gen.word Range.constantBounded
 
 genLovelace :: Gen Lovelace
 genLovelace = Lovelace <$> Gen.integral (Range.linear 0 5000)
+
+genRequiredSig :: Gen MultiSigScript
+genRequiredSig = do
+  verKey <- genVerificationKey AsPaymentKey
+  return . RequireSignature $ verificationKeyHash verKey
+
+genAllRequiredSig :: Gen MultiSigScript
+genAllRequiredSig =
+  RequireAllOf <$> Gen.list (Range.constant 1 10) genRequiredSig
+
+genAnyRequiredSig :: Gen MultiSigScript
+genAnyRequiredSig =
+  RequireAnyOf <$> Gen.list (Range.constant 1 10) genRequiredSig
+
+genMofNRequiredSig :: Gen MultiSigScript
+genMofNRequiredSig = do
+ required <- Gen.integral (Range.linear 2 15)
+ total <- Gen.integral (Range.linear (required + 1) 15)
+ RequireMOf required <$> Gen.list (Range.singleton total) genRequiredSig
+
+genMultiSigScript :: Gen MultiSigScript
+genMultiSigScript =
+  Gen.choice [genAllRequiredSig, genAnyRequiredSig, genMofNRequiredSig]
 
 genNetworkId :: Gen NetworkId
 genNetworkId =

@@ -1,3 +1,5 @@
+cabal-version: 2.4
+
 name:                  cardano-config
 version:               0.1.0.0
 author:                IOHK
@@ -7,7 +9,6 @@ license-files:
   LICENSE
   NOTICE
 build-type:            Simple
-cabal-version:         >= 1.10
 extra-source-files:    README.md
 
 flag systemd
@@ -22,67 +23,15 @@ library
     cpp-options:       -DSYSTEMD
     build-depends:     lobemo-scribe-systemd
 
-  exposed-modules:     Cardano.Config.GitRev
-                       Cardano.Config.GitRevFromGit
-                       Cardano.Config.LedgerQueries
-                       Cardano.Config.Parsers
-                       Cardano.Config.TopHandler
-                       Cardano.Config.Types
-                       Cardano.TracingOrphanInstances.Byron
-                       Cardano.TracingOrphanInstances.Common
-                       Cardano.TracingOrphanInstances.Consensus
-                       Cardano.TracingOrphanInstances.HardFork
-                       Cardano.TracingOrphanInstances.Mock
-                       Cardano.TracingOrphanInstances.Network
-                       Cardano.TracingOrphanInstances.Shelley
+  exposed-modules:     Cardano.Config.Git.Rev
+                       Cardano.Config.Git.RevFromGit
 
   build-depends:       base >=4.12 && <5
-                     , attoparsec
-                     , aeson
-                     , async
-                     , base16-bytestring
-                     , bytestring
-                     , canonical-json >= 0.6 && < 0.7
-                     , cardano-binary
-                     , cardano-crypto-class
-                     , cardano-crypto-wrapper
-                     , cardano-ledger
                      , cardano-prelude
-                     , cardano-slotting
-                     , cborg
-                     , containers
-                     , contra-tracer
-                     , cryptonite
-                     , directory
                      , file-embed
-                     , filepath
-                     , iohk-monitoring
-                     , lobemo-backend-aggregation
-                     , lobemo-backend-ekg
-                     , lobemo-backend-monitoring
-                     , lobemo-backend-trace-forwarder
-                     , network
-                     , network-mux
-                     , optparse-applicative
-                     , ouroboros-consensus
-                     , ouroboros-consensus-byron
-                     , ouroboros-consensus-cardano
-                     , ouroboros-consensus-mock
-                     , ouroboros-consensus-shelley
-                     , ouroboros-network
-                     , ouroboros-network-framework
                      , process
-                     , iproute
-                     , scientific
-                     , shelley-spec-ledger
-                     , string-conv
-                     , stm
                      , template-haskell
                      , text
-                     , transformers
-                     , transformers-except
-                     , typed-protocols
-                     , unordered-containers
 
   default-language:    Haskell2010
   default-extensions:  NoImplicitPrelude

@@ -1,13 +1,10 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving  #-}
 
 {-# OPTIONS_GHC -Wno-unticked-promoted-constructors #-}
 
@@ -17,68 +14,62 @@ module Cardano.CLI.Shelley.Run.Query
   , runQueryCmd
   ) where
 
-import           Prelude (String)
 import           Cardano.Prelude hiding (atomically)
+import           Prelude (String)
 
 import           Data.Aeson (ToJSON (..), (.=))
 import qualified Data.Aeson as Aeson
 import           Data.Aeson.Encode.Pretty (encodePretty)
-import qualified Data.ByteString.Base16 as B16
-import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8 as LBS
-import           Data.HashMap.Strict (HashMap)
-import qualified Data.HashMap.Strict as HMS
-import qualified Data.Map as Map
+import qualified Data.Map.Strict as Map
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import qualified Data.Text.IO as Text
+import qualified Data.Vector as Vector
 import           Numeric (showEFloat)
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT,
-                   newExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT, newExceptT)
 
-import           Cardano.Api.Typed
-import           Cardano.Api.Protocol
 import           Cardano.Api.LocalChainSync (getLocalTip)
+import           Cardano.Api.Protocol
+import           Cardano.Api.Typed
 
-import           Cardano.CLI.Shelley.Commands (QueryFilter(..))
 import           Cardano.CLI.Environment (EnvSocketError, readEnvSocketPath, renderEnvSocketError)
 import           Cardano.CLI.Helpers (HelpersError, pPrintCBOR, renderHelpersError)
 import           Cardano.CLI.Shelley.Orphans ()
 import           Cardano.CLI.Shelley.Parsers (OutputFile (..), QueryCmd (..))
+import           Cardano.CLI.Types
 
 import           Cardano.Binary (decodeFull)
-import           Cardano.Config.Types (SocketPath(..))
 import           Cardano.Crypto.Hash (hashToBytesAsHex)
 
 import           Ouroboros.Consensus.Cardano.Block (Either (..), EraMismatch (..), Query (..))
-import           Ouroboros.Consensus.HardFork.Combinator.Degenerate
-                   (Query (DegenQuery), Either (DegenQueryResult))
+import           Ouroboros.Consensus.HardFork.Combinator.Degenerate (Either (DegenQueryResult),
+                     Query (DegenQuery))
 import           Ouroboros.Consensus.Shelley.Protocol.Crypto (TPraosStandardCrypto)
-import           Ouroboros.Network.Block (getTipPoint)
+import           Ouroboros.Network.Block (Serialised (..), getTipPoint)
 
 
 import qualified Shelley.Spec.Ledger.Address as Ledger
 import           Shelley.Spec.Ledger.Coin (Coin (..))
-import qualified Shelley.Spec.Ledger.Credential              as Ledger
-import           Shelley.Spec.Ledger.Delegation.Certificates (PoolDistr(..))
-import qualified Shelley.Spec.Ledger.Delegation.Certificates as Ledger (PoolDistr(..))
+import qualified Shelley.Spec.Ledger.Credential as Ledger
+import           Shelley.Spec.Ledger.Delegation.Certificates (IndividualPoolStake (..),
+                     PoolDistr (..))
 import qualified Shelley.Spec.Ledger.Keys as Ledger
 import           Shelley.Spec.Ledger.LedgerState (EpochState)
 import qualified Shelley.Spec.Ledger.LedgerState as Ledger
 import           Shelley.Spec.Ledger.PParams (PParams)
 import qualified Shelley.Spec.Ledger.TxData as Ledger (TxId (..), TxIn (..), TxOut (..))
-import qualified Shelley.Spec.Ledger.UTxO as Ledger (UTxO(..))
+import qualified Shelley.Spec.Ledger.UTxO as Ledger (UTxO (..))
 
 import           Ouroboros.Consensus.Shelley.Ledger
 
-import           Ouroboros.Network.Block (Serialised (..))
 import           Ouroboros.Network.Protocol.LocalStateQuery.Type as LocalStateQuery
-                   (AcquireFailure (..))
+                     (AcquireFailure (..))
 
 
 data ShelleyQueryCmdError
@@ -124,7 +115,6 @@ runQueryCmd cmd =
       runQueryLedgerState protocol network mOutFile
     QueryUTxO protocol qFilter networkId mOutFile ->
       runQueryUTxO protocol qFilter networkId mOutFile
-    _ -> liftIO $ putStrLn $ "runQueryCmd: " ++ show cmd
 
 
 runQueryProtocolParameters
@@ -315,7 +305,7 @@ printStakeDistribution (PoolDistr stakeDist) = do
     putStrLn $ replicate (Text.length title + 2) '-'
     sequence_
       [ putStrLn $ showStakeDistr (StakePoolKeyHash poolId) stakeFraction (VrfKeyHash vrfKeyId)
-      | (poolId, (stakeFraction, vrfKeyId)) <- Map.toList stakeDist ]
+      | (poolId, (IndividualPoolStake stakeFraction vrfKeyId)) <- Map.toList stakeDist ]
   where
     title :: Text
     title =
@@ -327,7 +317,7 @@ printStakeDistribution (PoolDistr stakeDist) = do
                    -> String
     showStakeDistr poolId stakeFraction _vrfKeyId =
       concat
-        [ BS.unpack (serialiseToRawBytesHex poolId)
+        [ Text.unpack (serialiseToBech32 poolId)
         , "   "
         , showEFloat (Just 3) (fromRational stakeFraction :: Double) ""
 -- TODO: we could show the VRF id, but it will then not fit in 80 cols
@@ -395,24 +385,21 @@ data DelegationsAndRewards
 
 instance ToJSON DelegationsAndRewards where
   toJSON (DelegationsAndRewards nw delegsAndRwds) =
-      Aeson.Object $
-        Map.foldlWithKey' delegAndRwdToJson HMS.empty delegsAndRwds
+      Aeson.Array . Vector.fromList
+        . map delegAndRwdToJson $ Map.toList delegsAndRwds
     where
       delegAndRwdToJson
-        :: HashMap Text Aeson.Value
-        -> Ledger.Credential Ledger.Staking TPraosStandardCrypto
-        -> (Maybe (Hash StakePoolKey), Coin)
-        -> HashMap Text Aeson.Value
-      delegAndRwdToJson acc k (d, r) =
-        HMS.insert
-          (toKey k)
-          (Aeson.object ["delegation" .= d, "rewardAccountBalance" .= r])
-          acc
+        :: (Ledger.Credential 'Ledger.Staking TPraosStandardCrypto, (Maybe (Hash StakePoolKey), Coin))
+        -> Aeson.Value
+      delegAndRwdToJson (k, (d, r)) =
+        Aeson.object
+          [ "address" .= renderAddress k
+          , "delegation" .= d
+          , "rewardAccountBalance" .= r
+          ]
 
-      toKey = Text.decodeLatin1
-            . B16.encode
-            . Ledger.serialiseRewardAcnt
-            . Ledger.RewardAcnt (toShelleyNetwork nw)
+      renderAddress :: Ledger.Credential Ledger.Staking TPraosStandardCrypto -> Text
+      renderAddress = serialiseAddress . StakeAddress (toShelleyNetwork nw)
 
 
 -- | Query the current protocol parameters from a Shelley node via the local
@@ -458,7 +445,7 @@ queryPParamsFromLocalState connectInfo@LocalNodeConnectInfo{
 --
 queryStakeDistributionFromLocalState
   :: LocalNodeConnectInfo mode block
-  -> ExceptT LocalStateQueryError IO (Ledger.PoolDistr TPraosStandardCrypto)
+  -> ExceptT LocalStateQueryError IO (PoolDistr TPraosStandardCrypto)
 queryStakeDistributionFromLocalState LocalNodeConnectInfo{
                                        localNodeConsensusMode = ByronMode{}
                                      } =

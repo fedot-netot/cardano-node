@@ -1,6 +1,5 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {-# OPTIONS_GHC -Wno-unticked-promoted-constructors #-}
@@ -14,17 +13,17 @@ module Test.Cardano.Node.Gen
 
 import           Cardano.Prelude
 
-import           Cardano.Config.Types (NodeAddress(..), NodeHostAddress(..))
-import           Cardano.Node.Topology (NetworkTopology(..), NodeSetup(..),
-                   RemoteAddress(..))
+import           Cardano.Node.Configuration.Topology (NetworkTopology (..), NodeSetup (..),
+                     RemoteAddress (..))
+import           Cardano.Node.Types (NodeAddress (..), NodeHostAddress (..))
 
 import qualified Data.IP as IP
 
 import           Hedgehog (Gen)
 import           Hedgehog.Corpus (cooking)
 import qualified Hedgehog.Gen as Gen
-import qualified Hedgehog.Range as Range
 import           Hedgehog.Internal.Gen ()
+import qualified Hedgehog.Range as Range
 
 genNetworkTopology :: Gen NetworkTopology
 genNetworkTopology =

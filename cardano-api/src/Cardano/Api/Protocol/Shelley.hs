@@ -7,13 +7,13 @@ module Cardano.Api.Protocol.Shelley
   ) where
 
 
-import           Ouroboros.Consensus.Cardano
-                   (ProtocolClient(ProtocolClientShelley), ProtocolShelley)
+import           Ouroboros.Consensus.Cardano (ProtocolClient (ProtocolClientShelley),
+                     ProtocolShelley)
 import           Ouroboros.Consensus.Cardano.ShelleyHFC
 
 import           Ouroboros.Consensus.Shelley.Protocol (TPraosStandardCrypto)
 
-import           Cardano.Api.Protocol.Types (SomeNodeClientProtocol(..))
+import           Cardano.Api.Protocol.Types (SomeNodeClientProtocol (..))
 
 
 mkNodeClientProtocolShelley :: ProtocolClient

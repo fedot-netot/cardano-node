@@ -1,6 +1,7 @@
 module Cardano.CLI.Byron.Parsers
   ( ByronCommand(..)
   , NodeCmd(..)
+  , backwardsCompatibilityCommands
   , parseByronCommands
   , parseHeavyDelThd
   , parseInstallerHash
@@ -23,9 +24,10 @@ module Cardano.CLI.Byron.Parsers
 import           Cardano.Prelude hiding (option)
 import           Prelude (String)
 
+import           Control.Applicative ((<|>))
 import           Data.Bifunctor (first, second)
-import qualified Data.List.NonEmpty as NE
 import qualified Data.ByteString.Lazy.Char8 as C8
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Text as Text
 import           Data.Time (UTCTime)
 import           Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -34,61 +36,79 @@ import           Formatting (build, sformat)
 import           Options.Applicative
 import qualified Options.Applicative as Opt
 
-import           Cardano.Binary (Annotated(..))
+import           Cardano.Binary (Annotated (..))
 
+import           Cardano.Crypto (RequiresNetworkMagic (..), decodeHash)
 import           Cardano.Crypto.Hashing (hashRaw)
-import           Cardano.Crypto (RequiresNetworkMagic(..), decodeHash)
-import           Cardano.Crypto.ProtocolMagic
-                   (AProtocolMagic(..), ProtocolMagic
-                   , ProtocolMagicId(..))
+import           Cardano.Crypto.ProtocolMagic (AProtocolMagic (..), ProtocolMagic,
+                     ProtocolMagicId (..))
 
-import           Cardano.Chain.Slotting
-                   (EpochNumber(..), EpochSlots(..), SlotNumber(..))
-import           Cardano.Chain.Common
-                   (Address(..), decodeAddressBase58,
-                    Lovelace, mkLovelace, rationalToLovelacePortion,
-                    BlockCount(..), TxFeePolicy(..), TxSizeLinear(..))
-import           Cardano.Chain.Update
-                   (ApplicationName(..), checkApplicationName,
-                    InstallerHash(..), NumSoftwareVersion,
-                    ProtocolVersion(..), SoftforkRule(..), SoftwareVersion(..),
-                    SystemTag(..), checkSystemTag)
-import           Cardano.Chain.Genesis
-                   (TestnetBalanceOptions(..), FakeAvvmOptions(..))
-import           Cardano.Chain.UTxO (TxId, TxIn(..), TxOut(..))
+import           Cardano.Chain.Common (Address (..), BlockCount (..), Lovelace, TxFeePolicy (..),
+                     TxSizeLinear (..), decodeAddressBase58, mkLovelace, rationalToLovelacePortion)
+import           Cardano.Chain.Genesis (FakeAvvmOptions (..), TestnetBalanceOptions (..))
+import           Cardano.Chain.Slotting (EpochNumber (..), EpochSlots (..), SlotNumber (..))
+import           Cardano.Chain.Update (ApplicationName (..), InstallerHash (..), NumSoftwareVersion,
+                     ProtocolVersion (..), SoftforkRule (..), SoftwareVersion (..), SystemTag (..),
+                     checkApplicationName, checkSystemTag)
+import           Cardano.Chain.UTxO (TxId, TxIn (..), TxOut (..))
 
 import qualified Cardano.Api.Typed as Typed
-import           Cardano.Config.Types
-import           Cardano.Config.Parsers
-                   (parseIntegral, parseFraction, parseLovelace, readDouble,
-                    parseFilePath,  parseSigningKeyFile,
-                    parseGenesisFile, command', parseFlag')
 
 import           Cardano.CLI.Byron.Commands
 import           Cardano.CLI.Byron.Genesis
 import           Cardano.CLI.Byron.Key
 import           Cardano.CLI.Byron.Tx
 import           Cardano.CLI.Byron.UpdateProposal
+import           Cardano.CLI.Run (ClientCommand (ByronCommand))
+import           Cardano.CLI.Types
 
+command' :: String -> String -> Parser a -> Mod CommandFields a
+command' c descr p =
+    command c $ info (p <**> helper)
+              $ mconcat [ progDesc descr ]
 
-parseByronCommands :: Mod CommandFields ByronCommand
-parseByronCommands =
-  mconcat
-    [ parseNode
-    , parseGenesisRelatedValues
-    , parseKeyRelatedValues
-    , parseDelegationRelatedValues
-    , parseTxRelatedValues
-    , parseLocalNodeQueryValues
-    , parseMiscellaneous
-    ]
+backwardsCompatibilityCommands :: Parser ClientCommand
+backwardsCompatibilityCommands =
+  asum hiddenCmds
+ where
+  convertToByronCommand :: Mod CommandFields ByronCommand -> Parser ClientCommand
+  convertToByronCommand p = ByronCommand <$> Opt.subparser (p <> Opt.internal)
 
+  hiddenCmds :: [Parser ClientCommand]
+  hiddenCmds = map convertToByronCommand [ parseGenesisRelatedValues
+                                         , parseKeyRelatedValues
+                                         , parseDelegationRelatedValues
+                                         , parseTxRelatedValues
+                                         , parseLocalNodeQueryValues
+                                         , parseMiscellaneous
+                                         ]
 
-parseNode :: Mod CommandFields ByronCommand
-parseNode = mconcat
-    [ Opt.command "byron"
-        (Opt.info (NodeCmd <$> pNodeCmd) $ Opt.progDesc "Byron node operation commands")
-    ]
+-- Implemented with asum so all commands don't get hidden when trying to hide
+-- the 'pNodeCmdBackwardCompatible' parser.
+parseByronCommands :: Parser ByronCommand
+parseByronCommands = asum
+  [ subParser "key" (Opt.info (Opt.subparser parseKeyRelatedValues)
+      $ Opt.progDesc "Byron key utility commands")
+  , subParser "transaction" (Opt.info (Opt.subparser parseTxRelatedValues)
+      $ Opt.progDesc "Byron transaction commands")
+  , subParser "query" (Opt.info (Opt.subparser parseLocalNodeQueryValues)
+      $ Opt.progDesc "Byron node query commands.")
+  , subParser "genesis" (Opt.info (Opt.subparser parseGenesisRelatedValues)
+      $ Opt.progDesc "Byron genesis block commands")
+  , subParser "governance" (Opt.info (NodeCmd <$> Opt.subparser pNodeCmd)
+      $ Opt.progDesc "Byron governance commands")
+  , subParser "delegation" (Opt.info (Opt.subparser parseDelegationRelatedValues)
+      $ Opt.progDesc "Byron delegation commands")
+  , subParser "miscellaneous" (Opt.info (Opt.subparser parseMiscellaneous)
+      $ Opt.progDesc "Byron miscellaneous commands")
+  , NodeCmd <$> pNodeCmdBackwardCompatible
+  ]
+ where
+   subParser :: String -> ParserInfo ByronCommand -> Parser ByronCommand
+   subParser name pInfo = Opt.subparser $ Opt.command name pInfo
+
+pNodeCmdBackwardCompatible :: Parser NodeCmd
+pNodeCmdBackwardCompatible = Opt.subparser $ pNodeCmd <> Opt.internal
 
 parseCBORObject :: Parser CBORObject
 parseCBORObject = asum
@@ -206,9 +226,7 @@ parseKeyRelatedValues =
             $ Keygen
                 <$> parseCardanoEra
                 <*> parseNewSigningKeyFile "secret"
-                <*> parseFlag' GetPassword EmptyPassword
-                      "no-password"
-                      "Disable password protection."
+                <*> parsePassword
         , command'
             "to-verification"
             "Extract a verification key in its base64 form."
@@ -244,6 +262,7 @@ parseKeyRelatedValues =
                 <*> parseCardanoEra -- New CardanoEra
                 <*> parseNewSigningKeyFile "to"
         ]
+
 parseLocalNodeQueryValues :: Mod CommandFields ByronCommand
 parseLocalNodeQueryValues =
     mconcat
@@ -350,9 +369,8 @@ parseTxRelatedValues =
 parseVerificationKeyFile :: String -> String -> Parser VerificationKeyFile
 parseVerificationKeyFile opt desc = VerificationKeyFile <$> parseFilePath opt desc
 
-pNodeCmd :: Parser NodeCmd
+pNodeCmd :: Mod CommandFields NodeCmd
 pNodeCmd =
-  Opt.subparser $
     mconcat
       [ Opt.command "create-update-proposal"
           (Opt.info parseByronUpdateProposal $ Opt.progDesc  "Create an update proposal.")
@@ -726,3 +744,50 @@ cliParseTxId :: String -> TxId
 cliParseTxId =
   either (panic . ("Bad Lovelace value: " <>) . show) identity
   . decodeHash . Text.pack
+
+parseFraction :: String -> String -> Parser Rational
+parseFraction optname desc =
+  option (toRational <$> readDouble) $
+      long optname
+   <> metavar "DOUBLE"
+   <> help desc
+
+parseIntegral :: Integral a => String -> String -> Parser a
+parseIntegral optname desc = option (fromInteger <$> auto)
+  $ long optname <> metavar "INT" <> help desc
+
+parseLovelace :: String -> String -> Parser Lovelace
+parseLovelace optname desc =
+  either (panic . show) identity . mkLovelace
+    <$> parseIntegral optname desc
+
+readDouble :: ReadM Double
+readDouble = do
+  f <- auto
+  when (f < 0) $ readerError "fraction must be >= 0"
+  when (f > 1) $ readerError "fraction must be <= 1"
+  return f
+
+parseFilePath :: String -> String -> Parser FilePath
+parseFilePath optname desc =
+  strOption
+    ( long optname
+    <> metavar "FILEPATH"
+    <> help desc
+    <> completer (bashCompleter "file")
+    )
+
+parseSigningKeyFile :: String -> String -> Parser SigningKeyFile
+parseSigningKeyFile opt desc = SigningKeyFile <$> parseFilePath opt desc
+
+
+parseGenesisFile :: String -> Parser GenesisFile
+parseGenesisFile opt =
+  GenesisFile <$> parseFilePath opt "Genesis JSON file."
+
+parsePassword :: Parser PasswordRequirement
+parsePassword =
+  flag GetPassword EmptyPassword
+    (  long "no-password"
+    <> help "Disable password protection."
+    )

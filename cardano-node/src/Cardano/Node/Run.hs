@@ -3,7 +3,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -13,90 +12,80 @@
 
 module Cardano.Node.Run
   ( runNode
-  )
-where
+  ) where
 
 import           Cardano.Prelude hiding (ByteString, atomically, take, trace)
-import           Prelude (error)
+import           Prelude (String)
 
 import qualified Control.Concurrent.Async as Async
 import           Control.Tracer
 import qualified Data.ByteString.Char8 as BSC
 import           Data.Either (partitionEithers)
 import           Data.Functor.Contravariant (contramap)
-import qualified Data.List as List
 import           Data.Proxy (Proxy (..))
 import           Data.Semigroup ((<>))
 import           Data.Text (Text, breakOn, pack, take, unlines)
-import           GHC.Clock (getMonotonicTimeNSec)
 import           Data.Version (showVersion)
+import           GHC.Clock (getMonotonicTimeNSec)
 import           Network.HostName (getHostName)
 import           Network.Socket (AddrInfo, Socket)
 import           System.Directory (canonicalizePath, makeAbsolute)
 import           System.Environment (lookupEnv)
 
-import           Paths_cardano_node (version)
 import           Cardano.BM.Data.Aggregated (Measurable (..))
+import           Paths_cardano_node (version)
 #ifdef UNIX
 import qualified Cardano.BM.Configuration.Model as CM
 import           Cardano.BM.Data.Backend
 import           Cardano.BM.Data.BackendKind (BackendKind (..))
 #endif
-import           Cardano.BM.Data.LogItem (LOContent (..),
-                     PrivacyAnnotation (..), mkLOMeta)
-import           Cardano.BM.Data.Tracer (ToLogObject (..), TracingVerbosity(..))
+import           Cardano.BM.Data.LogItem (LOContent (..), PrivacyAnnotation (..), mkLOMeta)
+import           Cardano.BM.Data.Tracer (ToLogObject (..), TracingVerbosity (..))
 import           Cardano.BM.Data.Transformers (setHostname)
 import           Cardano.BM.Trace
 
-import           Cardano.Config.GitRev (gitRev)
-import           Cardano.Node.Logging (LoggingLayer (..), Severity (..), shutdownLoggingLayer)
-#ifdef UNIX
-import           Cardano.Node.TraceConfig (traceBlockFetchDecisions)
-#endif
-import           Cardano.Node.TraceConfig (TraceOptions(..), TraceSelection(..))
-import           Cardano.Node.Types (NodeConfiguration (..), NodeCLI(..),
-                   NodeMockProtocolConfiguration(..), NodeProtocolConfiguration(..),
-                   ncProtocol, parseNodeConfiguration)
-import           Cardano.Config.Types (ViewMode (..))
+import           Cardano.Config.Git.Rev (gitRev)
+import           Cardano.Node.Configuration.Logging (LoggingLayer (..), Severity (..),
+                     shutdownLoggingLayer)
+import           Cardano.Node.Types
+import           Cardano.Tracing.Config (TraceOptions (..), TraceSelection (..))
 
+import           Ouroboros.Consensus.Block (BlockProtocol)
+import qualified Ouroboros.Consensus.Cardano as Consensus
+import qualified Ouroboros.Consensus.Config as Consensus
+import           Ouroboros.Consensus.Config.SupportsNode (ConfigSupportsNode (..))
+import           Ouroboros.Consensus.Fragment.InFuture (defaultClockSkew)
+import           Ouroboros.Consensus.Node (DiffusionArguments (..), DiffusionTracers (..),
+                     DnsSubscriptionTarget (..), IPSubscriptionTarget (..), NodeArgs (..),
+                     NodeKernel, RunNode (..), RunNodeArgs (..))
+import qualified Ouroboros.Consensus.Node as Node (getChainDB, run)
+import           Ouroboros.Consensus.Node.NetworkProtocolVersion
+import           Ouroboros.Consensus.Node.ProtocolInfo
+import           Ouroboros.Consensus.Util.Orphans ()
 import           Ouroboros.Network.BlockFetch (BlockFetchConfiguration (..))
 import           Ouroboros.Network.Magic (NetworkMagic (..))
 import           Ouroboros.Network.NodeToClient (LocalConnectionId)
-import           Ouroboros.Network.NodeToNode (RemoteConnectionId, AcceptedConnectionsLimit (..))
-import           Ouroboros.Consensus.Block (BlockProtocol)
-import           Ouroboros.Consensus.Node (NodeKernel,
-                     DiffusionTracers (..), DiffusionArguments (..),
-                     DnsSubscriptionTarget (..), IPSubscriptionTarget (..), NodeArgs (..),
-                     RunNode (..),
-                     RunNodeArgs (..))
-import qualified Ouroboros.Consensus.Node as Node (getChainDB, run)
-import           Ouroboros.Consensus.Node.ProtocolInfo
-import           Ouroboros.Consensus.Node.NetworkProtocolVersion
-import           Ouroboros.Consensus.NodeId
-import           Ouroboros.Consensus.Config.SupportsNode (ConfigSupportsNode (..))
-import           Ouroboros.Consensus.Fragment.InFuture (defaultClockSkew)
-import qualified Ouroboros.Consensus.Config as Consensus
-import qualified Ouroboros.Consensus.Cardano as Consensus
-import           Ouroboros.Consensus.Util.Orphans ()
+import           Ouroboros.Network.NodeToNode (AcceptedConnectionsLimit (..), RemoteConnectionId)
 
 import qualified Ouroboros.Consensus.Storage.ChainDB as ChainDB
 import           Ouroboros.Consensus.Storage.ImmutableDB (ValidationPolicy (..))
 import           Ouroboros.Consensus.Storage.VolatileDB (BlockValidationPolicy (..))
 
-import           Cardano.Node.Topology
-import           Cardano.Config.Types
-import           Cardano.Node.Protocol
-                   (mkConsensusProtocol,
-                    SomeConsensusProtocol(..), renderProtocolInstantiationError)
-import           Cardano.Node.Socket (gatherConfiguredSockets, SocketOrSocketInfo(..))
-import           Cardano.Node.Shutdown
+import           Cardano.Node.Configuration.Socket (SocketOrSocketInfo (..),
+                     gatherConfiguredSockets)
+import           Cardano.Node.Configuration.Topology
+import           Cardano.Node.Handlers.Shutdown
+import           Cardano.Node.Protocol (SomeConsensusProtocol (..), mkConsensusProtocol,
+                     renderProtocolInstantiationError)
 import           Cardano.Tracing.Kernel
 import           Cardano.Tracing.Peer
 import           Cardano.Tracing.Tracers
 #ifdef UNIX
+import           Cardano.Node.Run.Trace (checkLiveViewRequiredTracers)
 import           Cardano.Node.TUI.Run
 #endif
 
+{- HLINT ignore "Use fewer imports" -}
 
 runNode
   :: LoggingLayer
@@ -108,13 +97,7 @@ runNode loggingLayer npm@NodeCLI{protocolFiles} = do
 
     nc <- parseNodeConfiguration npm
 
-    case ncTraceConfig nc of
-      TracingOff -> return ()
-      TracingOn traceConf ->
-        case traceVerbosity traceConf of
-          NormalVerbosity -> traceWith tracer $ "tracing verbosity = normal verbosity "
-          MinimalVerbosity -> traceWith tracer $ "tracing verbosity = minimal verbosity "
-          MaximalVerbosity -> traceWith tracer $ "tracing verbosity = maximal verbosity "
+    logTracingVerbosity nc tracer
 
     eitherSomeProtocol <- runExceptT $ mkConsensusProtocol nc (Just protocolFiles)
 
@@ -144,34 +127,12 @@ runNode loggingLayer npm@NodeCLI{protocolFiles} = do
         Async.uninterruptibleCancel upTimeThread
         Async.uninterruptibleCancel peersThread
 
-      LiveView   -> do
+      LiveView -> do
 #ifdef UNIX
         let c = llConfiguration loggingLayer
-        -- TODO: This desperately needs to be refactored.
+
         -- check required tracers are turned on
-        let reqtrs = [ ("TraceBlockFetchDecisions",traceBlockFetchDecisions)
-                     , ("TraceChainDb",traceChainDB)
-                     , ("TraceForge",traceForge)
-                     , ("TraceMempool",traceMempool)
-                     ]
-
-            tracersOff = [ ("TraceBlockFetchDecisions", False)
-                         , ("TraceChainDb", False)
-                         , ("TraceForge", False)
-                         , ("TraceMempool", False)
-                         ]
-
-        trsactive <- case ncTraceConfig nc of
-                       TracingOff -> return tracersOff
-                       TracingOn traceConf -> return $ map (\(t,f) -> (t, f traceConf)) reqtrs
-
-        unless (List.all (\(_, tracerOn) -> tracerOn == True) trsactive) $ do
-            putTextLn "for full functional 'LiveView', please turn on the following tracers in the configuration file:"
-            forM_ trsactive $ \(m, _) ->
-                putTextLn m
-            putTextLn "     (press enter to continue)"
-            _ <- getLine
-            pure ()
+        checkLiveViewRequiredTracers (ncTraceConfig nc)
 
         -- We run 'handleSimpleNode' as usual and run TUI thread as well.
         -- turn off logging to the console, only forward it through a pipe to a central logging process
@@ -198,6 +159,16 @@ runNode loggingLayer npm@NodeCLI{protocolFiles} = do
         Async.uninterruptibleCancel peersThread
 #endif
     shutdownLoggingLayer loggingLayer
+
+logTracingVerbosity :: NodeConfiguration -> Tracer IO String -> IO ()
+logTracingVerbosity nc tracer =
+  case ncTraceConfig nc of
+    TracingOff -> return ()
+    TracingOn traceConf ->
+      case traceVerbosity traceConf of
+        NormalVerbosity -> traceWith tracer $ "tracing verbosity = normal verbosity "
+        MinimalVerbosity -> traceWith tracer $ "tracing verbosity = minimal verbosity "
+        MaximalVerbosity -> traceWith tracer $ "tracing verbosity = maximal verbosity "
 
 -- | Add the application name and unqualified hostname to the logging
 -- layer basic trace.
@@ -288,7 +259,7 @@ handleSimpleNode p trace nodeTracers npm onKernel = do
 
   eitherTopology <- readTopologyFile npm
 
-  nt <- either (\err -> panic $ "Cardano.Node.Run.readTopologyFile: " <> err) pure eitherTopology
+  nt <- either (\err -> panic $ "Cardano.Node.Run.handleSimpleNode.readTopologyFile: " <> err) pure eitherTopology
 
   let diffusionArguments :: DiffusionArguments
       diffusionArguments = createDiffusionArguments publicSocketsOrAddrs
@@ -373,11 +344,11 @@ handleSimpleNode p trace nodeTracers npm onKernel = do
     -> Tracer IO Text
     -> Consensus.TopLevelConfig blk
     -> IO ()
-  createTracers npm'@NodeCLI{nodeMode = RealProtocolMode, nodeAddr, validateDB}
+  createTracers npm'@NodeCLI{nodeAddr, validateDB}
                 nc tr tracer cfg = do
          eitherTopology <- readTopologyFile npm'
          nt <- either
-                 (\err -> panic $ "Cardano.Node.Run.readTopologyFile: " <> err)
+                 (\err -> panic $ "Cardano.Node.Run.createTracers.readTopologyFile: " <> err)
                  pure
                  eitherTopology
 
@@ -406,49 +377,6 @@ handleSimpleNode p trace nodeTracers npm onKernel = do
          traceNamedObject cTr (meta, LogMessage gitRev)
 
          when validateDB $ traceWith tracer "Performing DB validation"
-
-  --TODO: there's still lots of duplication here, when only minor things are
-  -- different
-  createTracers npm'@NodeCLI{nodeMode = MockProtocolMode, nodeAddr, validateDB}
-                NodeConfiguration {
-                  ncProtocolConfig =
-                    NodeProtocolConfigurationMock
-                      NodeMockProtocolConfiguration {
-                        npcMockNodeId = CoreNodeId nodeid
-                      }
-                }
-                _tr tracer cfg = do
-         eitherTopology <- readTopologyFile npm'
-         (MockNodeTopology nodeSetups) <- either
-                                            (\err -> panic $ "Cardano.Node.Run.readTopologyFile: " <> err)
-                                            pure
-                                            eitherTopology
-
-         traceWith tracer $ "System started at " <> show (getSystemStart $ Consensus.configBlock cfg)
-         let producersList = map (\ns -> (nodeId ns, producers ns)) nodeSetups
-             producers' = case (List.lookup nodeid producersList) of
-                            Just ps ->  ps
-                            Nothing -> error $ "handleSimpleNode: own address "
-                                         <> show nodeAddr
-                                         <> ", Node Id "
-                                         <> show nodeid
-                                         <> " not found in topology"
-
-         traceWith tracer $ unlines
-                               [ ""
-                               , "**************************************"
-                               , "I am Node "        <> show nodeAddr
-                                          <> " Id: " <> show nodeid
-                               , "My producers are " <> show producers'
-                               , "**************************************"
-                               ]
-
-         when validateDB $ traceWith tracer "Performing DB validation"
-
-  createTracers NodeCLI{nodeMode = MockProtocolMode} _ _ _ _ =
-    --TODO: this ability to have a mismatch is silly. We should merge the info
-    -- from the config file and the cli early and resolve it all.
-    panic "createTracers: run in mock mode but config in non-mock mode"
 
 --------------------------------------------------------------------------------
 -- Helper functions

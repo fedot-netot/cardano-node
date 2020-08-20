@@ -1,7 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
@@ -14,24 +12,24 @@ module Cardano.Node.TUI.EventHandler
 import           Cardano.Prelude
 import           Prelude (String)
 
-import qualified Control.Concurrent.Async as Async
-import           Brick.Main (App(..), continue, customMain, halt, showFirstCursor)
 import           Brick.BChan (newBChan, writeBChan)
+import           Brick.Main (App (..), continue, customMain, halt, showFirstCursor)
 import           Brick.Themes (themeToAttrMap)
 import           Brick.Types (BrickEvent (..), EventM, Next)
+import qualified Control.Concurrent.Async as Async
 import qualified Data.Text as Text
 import           Data.Time.Clock (diffUTCTime, getCurrentTime)
 import           Data.Version (showVersion)
 import qualified Graphics.Vty as Vty
 
-import           Cardano.BM.Data.Aggregated (Measurable(..))
-import           Cardano.BM.Data.Backend (BackendKind(..), IsBackend(..), IsEffectuator(..))
-import           Cardano.BM.Data.Counter (Platform(..))
-import           Cardano.BM.Data.LogItem (LogObject(..), LOContent(..), LOMeta(..), utc2ns)
-import           Cardano.Config.GitRev (gitRev)
-import           Cardano.Node.Types (Protocol(..), MockProtocol(..))
-import           Cardano.Node.TUI.Drawing (ColorTheme(..), LiveViewState(..), LiveViewThread(..),
-                   Screen(..), darkTheme, drawUI, lightTheme)
+import           Cardano.BM.Data.Aggregated (Measurable (..))
+import           Cardano.BM.Data.Backend (BackendKind (..), IsBackend (..), IsEffectuator (..))
+import           Cardano.BM.Data.Counter (Platform (..))
+import           Cardano.BM.Data.LogItem (LOContent (..), LOMeta (..), LogObject (..), utc2ns)
+import           Cardano.Config.Git.Rev (gitRev)
+import           Cardano.Node.Protocol.Types (Protocol (..))
+import           Cardano.Node.TUI.Drawing (ColorTheme (..), LiveViewState (..), LiveViewThread (..),
+                     Screen (..), darkTheme, drawUI, lightTheme)
 
 import           Paths_cardano_node (version)
 
@@ -48,7 +46,7 @@ instance IsEffectuator (LiveViewBackend blk) Text where
             LogObject "cardano.node.metrics" meta content -> do
                 let currentTimeInNs = utc2ns (tstamp meta)
                 case content of
-                    LogValue "Meresident" (PureI pages) ->
+                    LogValue "Mem.resident" (PureI pages) ->
                         modifyMVar_ (getbe lvbe) $ \lvs -> do
                             let !mbytes     = fromIntegral (pages * pagesize) / 1024 / 1024 :: Float
                             let !maxMemory  = max (lvsMemoryUsageMax lvs) mbytes
@@ -61,7 +59,7 @@ instance IsEffectuator (LiveViewBackend blk) Text where
                                          , lvsUpTime          = uptime
                                          }
 
-                    LogValue "Meresident_size" (Bytes bytes) ->   -- Darwin
+                    LogValue "Mem.resident_size" (Bytes bytes) ->   -- Darwin
                         modifyMVar_ (getbe lvbe) $ \lvs -> do
                             let !mbytes     = fromIntegral bytes / 1024 / 1024 :: Float
                             let !maxMemory  = max (lvsMemoryUsageMax lvs) mbytes
@@ -260,6 +258,27 @@ instance IsEffectuator (LiveViewBackend blk) Text where
 
                         return $ lvs { lvsEpoch = fromIntegral epoch }
 
+            LogObject _ _ (LogValue "operationalCertificateStartKESPeriod" (PureI oCertStartKesPeriod)) ->
+                modifyMVar_ (getbe lvbe) $ \lvs -> do
+
+                        checkForUnexpectedThunks ["operationalCertificateStartKESPeriod LiveViewBackend"] lvs
+
+                        return $ lvs { lvsOpCertStartKESPeriod = fromIntegral oCertStartKesPeriod }
+
+            LogObject _ _ (LogValue "currentKESPeriod" (PureI currentKesPeriod)) ->
+                modifyMVar_ (getbe lvbe) $ \lvs -> do
+
+                        checkForUnexpectedThunks ["currentKESPeriod LiveViewBackend"] lvs
+
+                        return $ lvs { lvsCurrentKESPeriod = fromIntegral currentKesPeriod }
+
+            LogObject _ _ (LogValue "remainingKESPeriods" (PureI kesPeriodsUntilExpiry)) ->
+                modifyMVar_ (getbe lvbe) $ \lvs -> do
+
+                        checkForUnexpectedThunks ["remainingKESPeriods LiveViewBackend"] lvs
+
+                        return $ lvs { lvsRemainingKESPeriods = fromIntegral kesPeriodsUntilExpiry }
+
             _ -> pure ()
 
     handleOverflow _ = pure ()
@@ -320,8 +339,11 @@ eventHandler lvs  (VtyEvent e)         =
         Vty.EvKey  Vty.KEsc        []        -> continue $ lvs { lvsScreen = MainView }
         _                                -> continue lvs
   where
-    stopNodeThread :: MonadIO m => m ()
-    stopNodeThread =
+    stopNodeThread :: MonadIO m => m (Async ())
+    stopNodeThread = liftIO $ Async.async $ do
+      -- Because of this 100ms delay, Vty will be halted _before_ stopping node's thread.
+      -- It keeps the terminal in the normal state after quitting.
+      threadDelay 100000
       case getLVThread (lvsNodeThread lvs) of
         Nothing -> return ()
         Just t  -> liftIO $ Async.cancel t
@@ -333,7 +355,7 @@ initLiveViewState = do
     return $ LiveViewState
                 { lvsScreen                 = MainView
                 , lvsRelease                = "Release not set yet"
-                , lvsProtocol               = MockProtocol MockPBFT -- Needs a real value. Will be overwritten later.
+                , lvsProtocol               = CardanoProtocol -- Needs a real value. Will be overwritten later.
                 , lvsNodeId                 = "NodeId not set yet"
                 , lvsVersion                = showVersion version
                 , lvsCommit                 = Text.unpack gitRev
@@ -381,6 +403,9 @@ initLiveViewState = do
                 , lvsNetworkUsageOutNs      = 10000
                 , lvsMempoolMaxTxs          = 0
                 , lvsMempoolMaxBytes        = 0
+                , lvsOpCertStartKESPeriod   = 9999999999
+                , lvsCurrentKESPeriod       = 9999999999
+                , lvsRemainingKESPeriods    = 9999999999
                 , lvsMessage                = Nothing
                 , lvsUIThread               = LiveViewThread Nothing
                 , lvsMetricsThread          = LiveViewThread Nothing

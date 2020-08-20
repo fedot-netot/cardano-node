@@ -1,8 +1,6 @@
-{-# LANGUAGE DeriveAnyClass        #-}
-{-# LANGUAGE DeriveGeneric         #-}
-{-# LANGUAGE DeriveTraversable     #-}
-{-# LANGUAGE FlexibleInstances     #-}
-{-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -22,9 +20,9 @@ module Cardano.Tracing.Kernel
 import           Cardano.Prelude hiding (atomically)
 
 import           Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import           Shelley.Spec.Ledger.BaseTypes (StrictMaybe(..), fromSMaybe)
+import           Shelley.Spec.Ledger.BaseTypes (StrictMaybe (..), fromSMaybe)
 
-import           Ouroboros.Consensus.Node (NodeKernel(..))
+import           Ouroboros.Consensus.Node (NodeKernel (..))
 import           Ouroboros.Consensus.Util.Orphans ()
 
 import           Ouroboros.Network.NodeToClient (LocalConnectionId)

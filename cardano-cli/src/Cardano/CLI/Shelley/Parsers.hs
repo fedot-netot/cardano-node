@@ -11,12 +11,13 @@ module Cardano.CLI.Shelley.Parsers
   , renderTxIn
   ) where
 
-import           Prelude (String)
 import           Cardano.Prelude hiding (option)
+import           Prelude (String)
 
 import           Control.Monad.Fail (fail)
-import qualified Data.ByteString.Char8 as BSC
+import qualified Data.Attoparsec.ByteString.Char8 as Atto
 import qualified Data.ByteString.Base16 as Base16
+import qualified Data.ByteString.Char8 as BSC
 import qualified Data.Char as Char
 import qualified Data.IP as IP
 import qualified Data.Set as Set
@@ -24,15 +25,14 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as Text
 import           Data.Time.Clock (UTCTime)
 import           Data.Time.Format (defaultTimeLocale, iso8601DateFormat, parseTimeOrError)
-import           Options.Applicative (Parser)
+import           Options.Applicative hiding (str)
 import qualified Options.Applicative as Opt
-import qualified Data.Attoparsec.ByteString.Char8 as Atto
 
 import           Network.Socket (PortNumber)
 import           Network.URI (URI, parseURI)
 
-import           Cardano.Chain.Slotting (EpochSlots(..))
-import           Cardano.Slotting.Slot (SlotNo(..))
+import           Cardano.Chain.Slotting (EpochSlots (..))
+import           Cardano.Slotting.Slot (EpochNo (..), SlotNo (..))
 
 import           Ouroboros.Consensus.BlockchainTime (SystemStart (..))
 import           Ouroboros.Consensus.Cardano (SecurityParam (..))
@@ -43,16 +43,11 @@ import qualified Shelley.Spec.Ledger.TxData as Shelley
 import           Cardano.Api.Protocol (Protocol (..))
 import           Cardano.Api.Typed hiding (PoolId)
 
-import           Cardano.Slotting.Slot (EpochNo (..))
-
-import           Cardano.Config.Types (CertificateFile (..), SigningKeyFile(..),
-                   UpdateProposalFile (..))
-import           Cardano.Config.Parsers (parseNodeAddress)
 
 import           Cardano.CLI.Shelley.Commands
+import           Cardano.CLI.Types
 
-import qualified Cardano.Crypto.Hash as Crypto
-                   (Blake2b_256, Hash (..), hashFromBytesAsHex)
+import qualified Cardano.Crypto.Hash as Crypto (Blake2b_256, Hash (..), hashFromBytesAsHex)
 
 --
 -- Shelley CLI command parsers
@@ -81,10 +76,6 @@ parseShelleyCommands =
                , "is obtained from the CARDANO_NODE_SOCKET_PATH enviromnent variable."
                ]
             )
-      , Opt.command "block"
-          (Opt.info (BlockCmd <$> pBlockCmd) $ Opt.progDesc "Shelley block commands")
-      , Opt.command "system"
-          (Opt.info (SystemCmd <$> pSystemCmd) $ Opt.progDesc "Shelley system commands")
       , Opt.command "genesis"
           (Opt.info (GenesisCmd <$> pGenesisCmd) $ Opt.progDesc "Shelley genesis block commands")
       , Opt.command "governance"
@@ -135,6 +126,8 @@ pAddressCmd =
           (Opt.info pAddressBuild $ Opt.progDesc "Build a Shelley payment address, with optional delegation to a stake address.")
       , Opt.command "build-multisig"
           (Opt.info pAddressBuildMultiSig $ Opt.progDesc "Build a Shelley payment multi-sig address.")
+      , Opt.command "build-script"
+          (Opt.info pAddressBuildScript $ Opt.progDesc "Build a Shelley script address.")
       , Opt.command "info"
           (Opt.info pAddressInfo $ Opt.progDesc "Print information about an address.")
       ]
@@ -159,6 +152,12 @@ pAddressCmd =
     pAddressBuildMultiSig :: Parser AddressCmd
     pAddressBuildMultiSig = pure AddressBuildMultiSig
 
+    pAddressBuildScript :: Parser AddressCmd
+    pAddressBuildScript = AddressBuildScript
+                            <$> pScript
+                            <*> pNetworkId
+                            <*> pMaybeOutputFile
+
     pAddressInfo :: Parser AddressCmd
     pAddressInfo = AddressInfo <$> pAddress <*> pMaybeOutputFile
 
@@ -178,6 +177,16 @@ pPaymentVerificationKeyFile =
         )
     )
 
+pScript :: Parser ScriptFile
+pScript =
+  ScriptFile <$>
+    ( Opt.strOption
+        (  Opt.long "script-file"
+        <> Opt.metavar "FILE"
+        <> Opt.help "Filepath of the script."
+        <> Opt.completer (Opt.bashCompleter "file")
+        )
+    )
 
 pStakeAddress :: Parser StakeAddressCmd
 pStakeAddress =
@@ -189,12 +198,6 @@ pStakeAddress =
           (Opt.info pStakeAddressBuild $ Opt.progDesc "Build a stake address")
       , Opt.command "key-hash"
           (Opt.info pStakeAddressKeyHash $ Opt.progDesc "Print the hash of a stake address key.")
-      , Opt.command "register"
-          (Opt.info pStakeAddressRegister $ Opt.progDesc "Register a stake address")
-      , Opt.command "delegate"
-          (Opt.info pStakeAddressDelegate $ Opt.progDesc "Delegate from a stake address to a stake pool")
-      , Opt.command "de-register"
-          (Opt.info pStakeAddressDeRegister $ Opt.progDesc "De-register a stake address")
       , Opt.command "registration-certificate"
           (Opt.info pStakeAddressRegistrationCert $ Opt.progDesc "Create a stake address registration certificate")
       , Opt.command "deregistration-certificate"
@@ -216,16 +219,6 @@ pStakeAddress =
                                            <*> pNetworkId
                                            <*> pMaybeOutputFile
 
-    pStakeAddressRegister :: Parser StakeAddressCmd
-    pStakeAddressRegister = StakeKeyRegister <$> pPrivKeyFile <*> parseNodeAddress
-
-    pStakeAddressDelegate :: Parser StakeAddressCmd
-    pStakeAddressDelegate =
-      StakeKeyDelegate <$> pPrivKeyFile <*> pPoolId <*> pDelegationFee <*> parseNodeAddress
-
-    pStakeAddressDeRegister :: Parser StakeAddressCmd
-    pStakeAddressDeRegister = StakeKeyDeRegister <$> pPrivKeyFile <*> parseNodeAddress
-
     pStakeAddressRegistrationCert :: Parser StakeAddressCmd
     pStakeAddressRegistrationCert = StakeKeyRegistrationCert
                                       <$> pStakeVerificationKeyFile
@@ -241,15 +234,6 @@ pStakeAddress =
                                     <$> pStakeVerificationKeyFile
                                     <*> pStakePoolVerificationKeyHashOrFile
                                     <*> pOutputFile
-
-pDelegationFee :: Parser Lovelace
-pDelegationFee =
-  Lovelace <$>
-    Opt.option Opt.auto
-      (  Opt.long "delegation-fee"
-      <> Opt.metavar "LOVELACE"
-      <> Opt.help "The delegation fee in Lovelace."
-      )
 
 pKeyCmd :: Parser KeyCmd
 pKeyCmd =
@@ -310,9 +294,17 @@ pKeyCmd =
     pKeyConvertByronKey :: Parser KeyCmd
     pKeyConvertByronKey =
       KeyConvertByronKey
-        <$> pByronKeyType
+        <$> optional pPassword
+        <*> pByronKeyType
         <*> pByronKeyFile
         <*> pOutputFile
+
+    pPassword :: Parser Text
+    pPassword = Opt.strOption
+                  (  Opt.long "password"
+                  <> Opt.metavar "TEXT"
+                  <> Opt.help "Password for signing key (if applicable)."
+                  )
 
     pByronKeyType :: Parser ByronKeyType
     pByronKeyType =
@@ -435,8 +427,6 @@ pTransaction =
           (Opt.info pTransactionWitness $ Opt.progDesc "Witness a transaction")
       , Opt.command "sign-witness"
           (Opt.info pTransactionSignWit $ Opt.progDesc "Sign and witness a transaction")
-      , Opt.command "check"
-          (Opt.info pTransactionCheck $ Opt.progDesc "Check a transaction")
       , Opt.command "submit"
           (Opt.info pTransactionSubmit . Opt.progDesc $
              mconcat
@@ -477,9 +467,6 @@ pTransaction =
     pTransactionSignWit = TxSignWitness <$> pTxBodyFile Input
                                         <*> some pWitnessFile
                                         <*> pOutputFile
-
-    pTransactionCheck  :: Parser TransactionCmd
-    pTransactionCheck = pure TxCheck
 
     pTransactionSubmit  :: Parser TransactionCmd
     pTransactionSubmit = TxSubmit <$> pProtocol
@@ -571,13 +558,7 @@ pPoolCmd :: Parser PoolCmd
 pPoolCmd =
   Opt.subparser $
     mconcat
-      [ Opt.command "register"
-          (Opt.info pPoolRegster $ Opt.progDesc "Register a stake pool")
-      , Opt.command "re-register"
-          (Opt.info pPoolReRegster $ Opt.progDesc "Re-register a stake pool")
-      , Opt.command "retire"
-          (Opt.info pPoolRetire $ Opt.progDesc "Retire a stake pool")
-      , Opt.command "registration-certificate"
+      [ Opt.command "registration-certificate"
           (Opt.info pStakePoolRegistrationCert $ Opt.progDesc "Create a stake pool registration certificate")
       , Opt.command "deregistration-certificate"
           (Opt.info pStakePoolRetirementCert $ Opt.progDesc "Create a stake pool deregistration certificate")
@@ -588,17 +569,8 @@ pPoolCmd =
           (Opt.info pPoolMetaDataHashSubCmd $ Opt.progDesc "Print the hash of pool metadata.")
       ]
   where
-    pPoolRegster :: Parser PoolCmd
-    pPoolRegster = PoolRegister <$> pPoolId
-
-    pPoolReRegster :: Parser PoolCmd
-    pPoolReRegster = PoolReRegister <$> pPoolId
-
-    pPoolRetire :: Parser PoolCmd
-    pPoolRetire = PoolRetire <$> pPoolId <*> pEpochNo <*> parseNodeAddress
-
     pId :: Parser PoolCmd
-    pId = PoolGetId <$> pVerificationKeyFile Output
+    pId = PoolGetId <$> pVerificationKeyFile Output <*> pOutputFormat
 
     pPoolMetaDataHashSubCmd :: Parser PoolCmd
     pPoolMetaDataHashSubCmd = PoolMetaDataHash <$> pPoolMetaDataFile <*> pMaybeOutputFile
@@ -608,9 +580,7 @@ pQueryCmd :: Parser QueryCmd
 pQueryCmd =
   Opt.subparser $
     mconcat
-      [ Opt.command "pool-id"
-          (Opt.info pQueryPoolId $ Opt.progDesc "Get the node's pool id")
-      , Opt.command "protocol-parameters"
+      [ Opt.command "protocol-parameters"
           (Opt.info pQueryProtocolParameters $ Opt.progDesc "Get the node's current protocol parameters")
       , Opt.command "tip"
           (Opt.info pQueryTip $ Opt.progDesc "Get the node's current tip (slot no, hash, block no)")
@@ -623,17 +593,10 @@ pQueryCmd =
       , Opt.command "utxo"
           (Opt.info pQueryUTxO $ Opt.progDesc "Get the node's current UTxO with the option of \
                                               \filtering by address(es)")
-      , Opt.command "version"
-          (Opt.info pQueryVersion $ Opt.progDesc "Get the node version")
       , Opt.command "ledger-state"
           (Opt.info pQueryLedgerState $ Opt.progDesc "Dump the current state of the node")
-      , Opt.command "status"
-          (Opt.info pQueryStatus $ Opt.progDesc "Get the status of the node")
       ]
   where
-    pQueryPoolId :: Parser QueryCmd
-    pQueryPoolId = QueryPoolId <$> parseNodeAddress
-
     pQueryProtocolParameters :: Parser QueryCmd
     pQueryProtocolParameters =
       QueryProtocolParameters
@@ -667,26 +630,8 @@ pQueryCmd =
         <*> pNetworkId
         <*> pMaybeOutputFile
 
-    pQueryVersion :: Parser QueryCmd
-    pQueryVersion = QueryVersion <$> parseNodeAddress
-
     pQueryLedgerState :: Parser QueryCmd
     pQueryLedgerState = QueryLedgerState <$> pProtocol <*> pNetworkId <*> pMaybeOutputFile
-
-    pQueryStatus :: Parser QueryCmd
-    pQueryStatus = QueryStatus <$> parseNodeAddress
-
-
-pBlockCmd :: Parser BlockCmd
-pBlockCmd =
-  Opt.subparser $
-    mconcat
-      [ Opt.command "info"
-          (Opt.info pBlockInfo $ Opt.progDesc "Get the node's pool id")
-      ]
-  where
-    pBlockInfo :: Parser BlockCmd
-    pBlockInfo = BlockInfo <$> pBlockId <*> parseNodeAddress
 
 pGovernanceCmd :: Parser GovernanceCmd
 pGovernanceCmd =
@@ -698,10 +643,6 @@ pGovernanceCmd =
       , Opt.command "create-update-proposal"
           (Opt.info pUpdateProposal $
             Opt.progDesc "Create an update proposal")
-      , Opt.command "protocol-update"
-          (Opt.info pProtocolUpdate $ Opt.progDesc "Protocol update")
-      , Opt.command "cold-keys"
-          (Opt.info pColdKeys $ Opt.progDesc "Cold keys")
       ]
   where
     pMIRCertificate :: Parser GovernanceCmd
@@ -729,20 +670,6 @@ pGovernanceCmd =
                         <*> some pGenesisVerificationKeyFile
                         <*> pShelleyProtocolParametersUpdate
 
-    pProtocolUpdate :: Parser GovernanceCmd
-    pProtocolUpdate = GovernanceProtocolUpdate <$> pColdSigningKeyFile
-
-    pColdKeys :: Parser GovernanceCmd
-    pColdKeys = GovernanceColdKeys <$> pGenesisKeyFile
-
-    pGenesisKeyFile :: Parser SigningKeyFile
-    pGenesisKeyFile =
-      pColdSigningKeyFile
-        <|> Opt.strOption
-              (  Opt.long "genesis-key"
-              <> Opt.internal
-              )
-
 pRewardAmt :: Parser Lovelace
 pRewardAmt =
     Opt.option (readerFromAttoParser parseLovelace)
@@ -750,23 +677,6 @@ pRewardAmt =
       <> Opt.metavar "LOVELACE"
       <> Opt.help "The reward for the relevant reward account."
       )
-
-pSystemCmd :: Parser SystemCmd
-pSystemCmd =
-  Opt.subparser $
-    mconcat
-      [ Opt.command "start"
-          (Opt.info pSystemStart $ Opt.progDesc "Start system")
-      , Opt.command "stop"
-          (Opt.info pSystemStop $ Opt.progDesc "Stop system")
-      ]
-  where
-    pSystemStart :: Parser SystemCmd
-    pSystemStart = SysStart <$> pGenesisFile <*> parseNodeAddress
-
-    pSystemStop :: Parser SystemCmd
-    pSystemStop = SysStop <$> parseNodeAddress
-
 
 pGenesisCmd :: Parser GenesisCmd
 pGenesisCmd =
@@ -1069,15 +979,6 @@ pWitnessSigningKeyFile =
         )
     )
 
-pBlockId :: Parser BlockId
-pBlockId =
-  BlockId <$>
-    Opt.strOption
-      (  Opt.long "block-id"
-      <> Opt.metavar "STRING"
-      <> Opt.help "The block identifier."
-      )
-
 pKesPeriod :: Parser KESPeriod
 pKesPeriod =
   KESPeriod <$>
@@ -1133,6 +1034,17 @@ pOperatorCertIssueCounterFile =
     )
 
 
+pOutputFormat :: Parser OutputFormat
+pOutputFormat =
+  Opt.option readOutputFormat
+    (  Opt.long "output-format"
+    <> Opt.metavar "STRING"
+    <> Opt.help "Optional output format. Accepted output formats are \"hex\" \
+                \and \"bech32\" (default is \"bech32\")."
+    <> Opt.value OutputFormatBech32
+    )
+
+
 pMaybeOutputFile :: Parser (Maybe OutputFile)
 pMaybeOutputFile =
   optional $
@@ -1153,32 +1065,6 @@ pOutputFile =
       <> Opt.help "The output file."
       <> Opt.completer (Opt.bashCompleter "file")
       )
-
-pPoolId :: Parser PoolId
-pPoolId =
-  PoolId <$>
-    Opt.strOption
-      (  Opt.long "pool-id"
-      <> Opt.metavar "STRING"
-      <> Opt.help "The pool identifier."
-      )
-
-pPrivKeyFile :: Parser PrivKeyFile
-pPrivKeyFile =
-  PrivKeyFile <$>
-    ( Opt.strOption
-        (  Opt.long "signing-key-file"
-        <> Opt.metavar "FILE"
-        <> Opt.help "The private key file."
-        <> Opt.completer (Opt.bashCompleter "file")
-        )
-    <|>
-      Opt.strOption
-        (  Opt.long "private-key"
-        <> Opt.internal
-        )
-
-    )
 
 pColdVerificationKeyFile :: Parser VerificationKeyFile
 pColdVerificationKeyFile =
@@ -1493,14 +1379,26 @@ pPoolStakeVerificationKeyFile =
 pStakePoolVerificationKeyHash :: Parser (Hash StakePoolKey)
 pStakePoolVerificationKeyHash =
     Opt.option
-      (Opt.maybeReader spvkHash)
-        (  Opt.long "cold-verification-key-hash"
-        <> Opt.metavar "HASH"
-        <> Opt.help "Stake pool verification key hash (hex-encoded)."
+      (Opt.maybeReader pBech32OrHexStakePoolId)
+        (  Opt.long "stake-pool-id"
+        <> Opt.metavar "STAKE-POOL-ID"
+        <> Opt.help "Stake pool ID/verification key hash (either \
+                    \Bech32-encoded or hex-encoded)."
         )
   where
-    spvkHash :: String -> Maybe (Hash StakePoolKey)
-    spvkHash = deserialiseFromRawBytesHex (AsHash AsStakePoolKey) . BSC.pack
+    pBech32OrHexStakePoolId :: String -> Maybe (Hash StakePoolKey)
+    pBech32OrHexStakePoolId str =
+      pBech32StakePoolId str <|> pHexStakePoolId str
+
+    pHexStakePoolId :: String -> Maybe (Hash StakePoolKey)
+    pHexStakePoolId =
+      deserialiseFromRawBytesHex (AsHash AsStakePoolKey) . BSC.pack
+
+    pBech32StakePoolId :: String -> Maybe (Hash StakePoolKey)
+    pBech32StakePoolId =
+      either (const Nothing) Just
+        . deserialiseFromBech32 (AsHash AsStakePoolKey)
+        . Text.pack
 
 pStakePoolVerificationKeyHashOrFile :: Parser StakePoolVerificationKeyHashOrFile
 pStakePoolVerificationKeyHashOrFile =
@@ -1611,12 +1509,10 @@ eDNSName str =
     Just dnsName -> Right . Text.encodeUtf8 . Shelley.dnsToText $ dnsName
 
 pSingleHostAddress :: Parser StakePoolRelay
-pSingleHostAddress =
-  liftA3
-    (\ip4 ip6 port -> singleHostAddress ip4 ip6 port)
-    (optional pIpV4)
-    (optional pIpV6)
-    pPort
+pSingleHostAddress = singleHostAddress
+  <$> optional pIpV4
+  <*> optional pIpV6
+  <*> pPort
  where
   singleHostAddress :: Maybe IP.IPv4 -> Maybe IP.IPv6 -> PortNumber -> StakePoolRelay
   singleHostAddress ipv4 ipv6 port =
@@ -1889,7 +1785,10 @@ pProtocol =
     )
   <|>
     -- Default to the Cardano protocol.
-    pure (CardanoProtocol defaultByronEpochSlots defaultSecurityParam)
+    pure
+      (CardanoProtocol
+        (EpochSlots defaultByronEpochSlots)
+        (SecurityParam defaultSecurityParam))
   where
     pByron :: Parser Protocol
     pByron = ByronProtocol <$> pEpochSlots <*> pSecurityParam
@@ -1902,44 +1801,31 @@ pProtocol =
 
     pEpochSlots :: Parser EpochSlots
     pEpochSlots =
-        ( EpochSlots <$>
-            Opt.option Opt.auto
-              (  Opt.long "epoch-slots"
-              <> Opt.metavar "NATURAL"
-              <> Opt.help
-                    (  "The number of slots per epoch for the Byron era "
-                    <> "(default is "
-                    <> show (unEpochSlots defaultByronEpochSlots)
-                    <> ")."
-                    )
-              )
-        )
-      <|>
-        -- Default to the mainnet value.
-        pure defaultByronEpochSlots
+      EpochSlots <$>
+        Opt.option Opt.auto
+          (  Opt.long "epoch-slots"
+          <> Opt.metavar "NATURAL"
+          <> Opt.help "The number of slots per epoch for the Byron era."
+          <> Opt.value defaultByronEpochSlots -- Default to the mainnet value.
+          <> Opt.showDefault
+          )
 
     pSecurityParam :: Parser SecurityParam
     pSecurityParam =
-        ( SecurityParam <$>
-            Opt.option Opt.auto
-              (  Opt.long "security-param"
-              <> Opt.metavar "NATURAL"
-              <> Opt.help
-                    (  "The security parameter (default is "
-                    <> show (maxRollbacks defaultSecurityParam)
-                    <> ")."
-                    )
-              )
-        )
-      <|>
-          -- Default to the mainnet value.
-          pure defaultSecurityParam
+      SecurityParam <$>
+        Opt.option Opt.auto
+          (  Opt.long "security-param"
+          <> Opt.metavar "NATURAL"
+          <> Opt.help "The security parameter."
+          <> Opt.value defaultSecurityParam -- Default to the mainnet value.
+          <> Opt.showDefault
+          )
 
-    defaultByronEpochSlots :: EpochSlots
-    defaultByronEpochSlots = EpochSlots 21600
+    defaultByronEpochSlots :: Word64
+    defaultByronEpochSlots = 21600
 
-    defaultSecurityParam :: SecurityParam
-    defaultSecurityParam = SecurityParam 2160
+    defaultSecurityParam :: Word64
+    defaultSecurityParam = 2160
 
 pProtocolVersion :: Parser (Natural, Natural)
 pProtocolVersion =
@@ -1958,7 +1844,6 @@ pProtocolVersion =
         <> Opt.help "Minor protocol version. An increase indicates a soft fork\
                     \ (old software canvalidate but not produce new blocks)."
         )
-
 
 --
 -- Shelley CLI flag field parsers
@@ -1996,6 +1881,17 @@ lexPlausibleAddressString =
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
+
+readOutputFormat :: Opt.ReadM OutputFormat
+readOutputFormat = do
+  s <- Opt.str
+  case s of
+    "hex" -> pure OutputFormatHex
+    "bech32" -> pure OutputFormatBech32
+    _ ->
+      fail $ "Invalid output format: \""
+        <> s
+        <> "\". Accepted output formats are \"hex\" and \"bech32\"."
 
 readURIOfMaxLength :: Int -> Opt.ReadM URI
 readURIOfMaxLength maxLen = do

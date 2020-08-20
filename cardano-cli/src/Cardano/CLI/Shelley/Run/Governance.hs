@@ -9,13 +9,13 @@ import           Cardano.Prelude
 import qualified Data.Text as Text
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (firstExceptT, left, right,
-                   newExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, left, newExceptT, right)
 
-import           Cardano.Api.Typed
 import           Cardano.Api.TextView (TextViewDescription (..), textShow)
+import           Cardano.Api.Typed
 
 import           Cardano.CLI.Shelley.Parsers
+import           Cardano.CLI.Types
 
 import qualified Shelley.Spec.Ledger.TxData as Shelley
 
@@ -51,7 +51,6 @@ renderShelleyGovernanceError err =
 runGovernanceCmd :: GovernanceCmd -> ExceptT ShelleyGovernanceError IO ()
 runGovernanceCmd (GovernanceMIRCertificate mirpot vKeys rewards out) = runGovernanceMIRCertificate mirpot vKeys rewards out
 runGovernanceCmd (GovernanceUpdateProposal out eNo genVKeys ppUp) = runGovernanceUpdateProposal out eNo genVKeys ppUp
-runGovernanceCmd cmd = liftIO $ putStrLn $ "TODO: runGovernanceCmd: " ++ show cmd
 
 runGovernanceMIRCertificate
   :: Shelley.MIRPot

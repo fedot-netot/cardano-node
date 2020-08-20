@@ -12,22 +12,19 @@ import           Control.Tracer (stdoutTracer)
 import           Options.Applicative
 import qualified Options.Applicative as Opt
 
+import           Cardano.Chain.Slotting (EpochSlots (..))
 import           Ouroboros.Consensus.BlockchainTime (SlotLength, slotLengthFromSec)
-import           Ouroboros.Consensus.Cardano (SecurityParam(..))
+import           Ouroboros.Consensus.Cardano (SecurityParam (..))
 import           Ouroboros.Network.Block (BlockNo)
-import           Cardano.Chain.Slotting (EpochSlots(..))
 
-import           Cardano.Api.Typed (NetworkMagic(..))
-import           Cardano.Api.Protocol.Types
 import           Cardano.Api.Protocol.Byron
 import           Cardano.Api.Protocol.Cardano
 import           Cardano.Api.Protocol.Shelley
-import           Cardano.Config.Types (SocketPath(..))
-import           Cardano.Node.Types
-                   (ConfigYamlFilePath(..), parseNodeConfigurationFP,
-                    Protocol(..), ncProtocol)
-import           Cardano.Config.Parsers
+import           Cardano.Api.Protocol.Types
+import           Cardano.Api.Typed (NetworkMagic (..))
 import           Cardano.Chairman (chairmanTest)
+import           Cardano.Node.Protocol.Types (Protocol (..))
+import           Cardano.Node.Types
 
 main :: IO ()
 main = do
@@ -58,10 +55,6 @@ main = do
 mkNodeClientProtocol :: Protocol -> SomeNodeClientProtocol
 mkNodeClientProtocol protocol =
     case protocol of
-      MockProtocol _ ->
-        panic "TODO: mkNodeClientProtocol NodeProtocolConfigurationMock"
-
-      -- Real protocols
       ByronProtocol ->
         mkSomeNodeClientProtocolByron
           (EpochSlots 21600) (SecurityParam 2160)
@@ -87,6 +80,24 @@ data ChairmanArgs = ChairmanArgs {
     , caSecurityParam :: !SecurityParam
     , caNetworkMagic :: !NetworkMagic
     }
+
+parseConfigFile :: Parser FilePath
+parseConfigFile =
+  strOption
+    ( long "config"
+    <> metavar "NODE-CONFIGURATION"
+    <> help "Configuration file for the cardano-node"
+    <> completer (bashCompleter "file")
+    )
+
+parseSocketPath :: Text -> Parser SocketPath
+parseSocketPath helpMessage =
+  SocketPath <$> strOption
+    ( long "socket-path"
+        <> (help $ toS helpMessage)
+        <> completer (bashCompleter "file")
+        <> metavar "FILEPATH"
+    )
 
 parseRunningTime :: Parser DiffTime
 parseRunningTime =

@@ -1,5 +1,5 @@
-{-# LANGUAGE DerivingStrategies         #-}
-{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -15,8 +15,7 @@ import qualified Data.Time as Time
 
 import           Cardano.Slotting.Slot (EpochSize (..))
 
-import           Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..),
-                   emptyGenesisStaking)
+import           Ouroboros.Consensus.Shelley.Node (ShelleyGenesis (..), emptyGenesisStaking)
 
 import           Shelley.Spec.Ledger.BaseTypes as Ledger
 import           Shelley.Spec.Ledger.PParams as Ledger (PParams' (..), emptyPParams)

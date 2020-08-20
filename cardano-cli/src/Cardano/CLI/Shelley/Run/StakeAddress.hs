@@ -11,13 +11,13 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (bimapExceptT, firstExceptT,
-                   newExceptT)
+import           Control.Monad.Trans.Except.Extra (bimapExceptT, firstExceptT, newExceptT)
 
 import           Cardano.Api.TextView (TextViewDescription (..))
 import           Cardano.Api.Typed
 
 import           Cardano.CLI.Shelley.Parsers
+import           Cardano.CLI.Types
 
 data ShelleyStakeAddressCmdError
   = ShelleyStakeAddressKeyPairError
@@ -49,7 +49,6 @@ runStakeAddressCmd (StakeKeyDelegationCert stkKeyVerKeyFp stkPoolVerKeyHashOrFp 
   runStakeKeyDelegationCert stkKeyVerKeyFp stkPoolVerKeyHashOrFp outputFp
 runStakeAddressCmd (StakeKeyDeRegistrationCert stkKeyVerKeyFp outputFp) =
   runStakeKeyDeRegistrationCert stkKeyVerKeyFp outputFp
-runStakeAddressCmd cmd = liftIO $ putStrLn $ "runStakeAddressCmd: " ++ show cmd
 
 
 --

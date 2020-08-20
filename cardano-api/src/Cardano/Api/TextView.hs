@@ -1,5 +1,4 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes #-}
 
@@ -23,9 +22,8 @@ module Cardano.Api.TextView
 import           Cardano.Prelude
 import           Prelude (String)
 
-import           Data.Aeson (FromJSON(..), ToJSON(..), object,
-                   withObject, (.=), (.:))
-import           Data.Aeson.Encode.Pretty (Config(..), defConfig, keyOrder)
+import           Data.Aeson (FromJSON (..), ToJSON (..), object, withObject, (.:), (.=))
+import           Data.Aeson.Encode.Pretty (Config (..), defConfig, keyOrder)
 import qualified Data.ByteString.Base16 as Base16
 import           Data.ByteString.Char8 (ByteString)
 import qualified Data.Text as Text
@@ -58,8 +56,8 @@ data TextView = TextView
   } deriving (Eq, Show)
 
 instance ToJSON TextView where
-  toJSON (TextView (TextViewType tvType) (TextViewDescription desc) rawCBOR) =
-    object [ "type" .= Text.decodeUtf8 tvType
+  toJSON (TextView (TextViewType tvType') (TextViewDescription desc) rawCBOR) =
+    object [ "type" .= Text.decodeUtf8 tvType'
            , "description" .= Text.decodeUtf8 desc
            , "cborHex" .= (Text.decodeUtf8 $ Base16.encode rawCBOR)
            ]

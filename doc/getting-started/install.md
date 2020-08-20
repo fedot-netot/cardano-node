@@ -34,7 +34,7 @@ For Debian/Ubuntu use the following instead:
 
 
     sudo apt-get update -y
-    sudo apt-get install build-essential pkg-config libffi-dev libgmp-dev libssl-dev libtinfo-dev libsystemd-dev zlib1g-dev make g++ tmux git jq wget libncursesw5 libtool autoconf -y
+    sudo apt-get install automake build-essential pkg-config libffi-dev libgmp-dev libssl-dev libtinfo-dev libsystemd-dev zlib1g-dev make g++ tmux git jq wget libncursesw5 libtool autoconf -y
 
 If you are using a different flavor of Linux, you will need to use the package manager suitable for your platform instead of `yum` or `apt-get`, and the names of the packages you need to install might differ.
 
@@ -93,6 +93,8 @@ Add the following to your .bashrc file and source it.
     export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
 
 #### Download the source code for cardano-node
+
+Back in the home directory: 
 
     git clone https://github.com/input-output-hk/cardano-node.git
 

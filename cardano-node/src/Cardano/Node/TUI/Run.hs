@@ -1,4 +1,3 @@
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE RankNTypes #-}
 
 module Cardano.Node.TUI.Run
@@ -25,17 +24,16 @@ import qualified Data.Text as Text
 import           Cardano.BM.Counters (readCounters)
 import           Cardano.BM.Data.Backend
 import           Cardano.BM.Data.Counter
-import           Cardano.BM.Data.LogItem (LOContent(..),
-                   PrivacyAnnotation (Confidential), mkLOMeta)
+import           Cardano.BM.Data.LogItem (LOContent (..), PrivacyAnnotation (Confidential),
+                     mkLOMeta)
 import           Cardano.BM.Data.Observable
 import           Cardano.BM.Data.Severity
 import           Cardano.BM.Data.SubTrace
 import           Cardano.BM.Trace
-import           Cardano.Node.TUI.Drawing (LiveViewState(..), LiveViewThread(..))
-import           Cardano.Node.TUI.EventHandler (LiveViewBackend(..))
+import           Cardano.Node.TUI.Drawing (LiveViewState (..), LiveViewThread (..))
+import           Cardano.Node.TUI.EventHandler (LiveViewBackend (..))
 import           Cardano.Tracing.Peer (Peer (..))
 
-import           Cardano.Config.Types (NodeAddress(..))
 import           Cardano.Node.Types
 
 -- | Change a few fields in the LiveViewState after it has been initialized above.
@@ -52,17 +50,7 @@ liveViewPostSetup lvbe ncli nc = do
     -- an ID. We don't even have a port number that we know if we're given our
     -- listening socket via systemd socket activation.
     nodeId :: Text
-    nodeId =
-      case ncProtocolConfig nc of
-        NodeProtocolConfigurationMock
-          NodeMockProtocolConfiguration { npcMockNodeId } ->
-            Text.pack (show npcMockNodeId)
-
-        _ -> Text.pack $ "Port: " <>
-          case naPort <$> nodeAddr ncli of
-            Nothing -> "-"
-            Just port -> show port
-
+    nodeId = Text.pack $ "Port: " <> maybe "-" show (naPort <$> nodeAddr ncli)
 
 setNodeThread :: NFData a => LiveViewBackend blk a -> Async.Async () -> IO ()
 setNodeThread lvbe nodeThr =

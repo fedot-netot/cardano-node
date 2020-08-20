@@ -18,6 +18,7 @@ cardano-node
 
    getting-started/install
    getting-started/building-the-node-using-nix
+   getting-started/building-the-documentation
    getting-started/understanding-config-files
    getting-started/cli
 
@@ -25,6 +26,7 @@ cardano-node
    :maxdepth: 3
    :caption: Stakepool Operations
    :titlesonly:
+   :numbered:
    :hidden:
 
    stake-pool-operations/getConfigFiles_AND_Connect
@@ -48,6 +50,7 @@ cardano-node
    logging-monitoring/prometheus
    logging-monitoring/grafana
    logging-monitoring/ekg
+   logging-monitoring/liveview
 
 .. toctree::
    :maxdepth: 3
@@ -55,9 +58,8 @@ cardano-node
    :titlesonly:
    :hidden:
 
+   reference/shelley-genesis
+   reference/configuring-a-node-using-yaml
    reference/cardano-node-cli-reference
    reference/building-and-signing-tx
    reference/diagnosing-transactions
-   reference/shelley-genesis
-   reference/configuring-a-node-using-yaml
-   reference/transactions

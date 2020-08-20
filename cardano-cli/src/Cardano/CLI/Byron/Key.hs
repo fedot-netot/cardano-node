@@ -22,15 +22,14 @@ module Cardano.CLI.Byron.Key
   )
 where
 
-import           Prelude (String, show)
 import           Cardano.Prelude hiding (option, show, trace, (%))
+import           Prelude (String, show)
 
 import           Codec.CBOR.Read (DeserialiseFailure, deserialiseFromBytes)
 import           Codec.CBOR.Write (toLazyByteString)
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra
-                   (firstExceptT, handleIOExceptT, hoistEither)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, handleIOExceptT, hoistEither)
 import qualified Data.ByteArray as BA
 import qualified Data.ByteString as SB
 import qualified Data.ByteString.Lazy as LB
@@ -38,16 +37,16 @@ import qualified Data.ByteString.UTF8 as UTF8
 import           Data.String (IsString, fromString)
 import           Data.Text (Text)
 import qualified Data.Text as T
-import           Formatting (build, (%), sformat)
+import           Formatting (build, sformat, (%))
 
-import           System.IO (hSetEcho, hFlush, stdout, stdin)
+import           System.IO (hFlush, hSetEcho, stdin, stdout)
 
 import qualified Cardano.Chain.Common as Common
 import qualified Cardano.Chain.Genesis as Genesis
+import qualified Cardano.CLI.Byron.Legacy as Legacy
 import           Cardano.CLI.Helpers (textShow)
-import qualified Cardano.CLI.Legacy.Byron as Legacy
-import           Cardano.Config.Types (SigningKeyFile(..))
-import           Cardano.Crypto (SigningKey(..))
+import           Cardano.CLI.Types
+import           Cardano.Crypto (SigningKey (..))
 import qualified Cardano.Crypto.Random as Crypto
 import qualified Cardano.Crypto.Signing as Crypto
 
@@ -73,10 +72,6 @@ renderByronKeyFailure err =
 
 newtype NewSigningKeyFile =
   NewSigningKeyFile FilePath
-  deriving (Eq, Ord, Show, IsString)
-
-newtype VerificationKeyFile =
-  VerificationKeyFile FilePath
   deriving (Eq, Ord, Show, IsString)
 
 newtype NewVerificationKeyFile =

@@ -32,15 +32,7 @@ The latest supported networks can be found at `<https://hydra.iohk.io/job/Cardan
 How to build
 ============
 
-Cabal
------
-
-Use `Cabal - Version 3.0 <https://www.haskell.org/cabal/>`_ to build this project:
-
-.. code-block:: console
-
-    $ cd cardano-node
-    $ cabal build
+Documentation for building the node can be found `here <https://docs.cardano.org/projects/cardano-node/en/latest/getting-started/install.html>`_.
 
 Windows Executable
 ==================
@@ -100,8 +92,6 @@ The ``--config`` flag points to a ``.yaml`` file that is responsible to configur
 `configuration.yaml <https://github.com/input-output-hk/cardano-node/blob/master/configuration/defaults/byron-mainnet/configuration.yaml>`_.
 Some of the more important settings are as follows:
 
-* ``NodeId: 0``  -- Used in mock protocols only to differentiate nodes.
-
 * ``Protocol: RealPBFT`` -- Protocol the node will execute
 
 * ``RequiresNetworkMagic``: RequiresNoMagic -- Used to distinguish between mainnet (``RequiresNoMagic``) and testnets (``RequiresMagic``)
@@ -148,10 +138,10 @@ All subcommands have help available:
 
    $ cabal v2-run -- cardano-cli migrate-delegate-key-from --help
    Usage: cardano-cli migrate-delegate-key-from (--byron-legacy | --bft | --praos |
-                                                 --mock-pbft | --real-pbft)
+                                                 --real-pbft)
                                                  --from FILEPATH
                                                 (--byron-legacy | --bft | --praos |
-                                                 --mock-pbft | --real-pbft)
+                                                 --real-pbft)
                                                  --to FILEPATH
    Migrate a delegate key from an older version.
 
@@ -159,14 +149,12 @@ All subcommands have help available:
      --byron-legacy           Byron/Ouroboros Classic suite of algorithms
      --bft                    BFT consensus
      --praos                  Praos consensus
-     --mock-pbft              Permissive BFT consensus with a mock ledger
-     --real-pbft              Permissive BFT consensus with a real ledger
+     --real-pbft              Permissive BFT consensus
      --from FILEPATH          Signing key file to migrate.
      --byron-legacy           Byron/Ouroboros Classic suite of algorithms
      --bft                    BFT consensus
      --praos                  Praos consensus
-     --mock-pbft              Permissive BFT consensus with a mock ledger
-     --real-pbft              Permissive BFT consensus with a real ledger
+     --real-pbft              Permissive BFT consensus
      --to FILEPATH            Non-existent file to write the signing key to.
      -h,--help                Show this help text
 

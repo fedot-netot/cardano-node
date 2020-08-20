@@ -23,8 +23,7 @@ import           Cardano.Prelude
 
 import           Codec.CBOR.Read (DeserialiseFailure, deserialiseFromBytes)
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (bimapExceptT, firstExceptT,
-                                                   hoistEither, left)
+import           Control.Monad.Trans.Except.Extra (bimapExceptT, firstExceptT, hoistEither, left)
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.Text as Text
 
@@ -43,12 +42,9 @@ import qualified Ouroboros.Consensus.Cardano as Consensus
 import           Ouroboros.Consensus.Cardano.ByronHFC
 
 import           Cardano.Node.Types
-                   (NodeByronProtocolConfiguration (..), GenesisHash(..))
-import           Cardano.Config.Types
-                   (ProtocolFilepaths(..), GenesisFile (..))
 
-import           Cardano.TracingOrphanInstances.Byron ()
-import           Cardano.TracingOrphanInstances.HardFork ()
+import           Cardano.Tracing.OrphanInstances.Byron ()
+import           Cardano.Tracing.OrphanInstances.HardFork ()
 
 import           Cardano.Node.Protocol.Types
 
@@ -159,7 +155,7 @@ readGenesis (GenesisFile file) mbExpectedGenesisHash ncReqNetworkMagic = do
 readLeaderCredentials :: Genesis.Config
                       -> Maybe ProtocolFilepaths
                       -> ExceptT ByronProtocolInstantiationError IO
-                                 (Maybe PBftLeaderCredentials)
+                                 (Maybe ByronLeaderCredentials)
 readLeaderCredentials _ Nothing = return Nothing
 readLeaderCredentials genesisConfig
                       (Just ProtocolFilepaths {
@@ -181,9 +177,9 @@ readLeaderCredentials genesisConfig
                          . hoistEither
                          $ canonicalDecodePretty delegCertFileBytes
 
-         bimapExceptT PbftError Just
+         bimapExceptT CredentialsError Just
            . hoistEither
-           $ mkPBftLeaderCredentials genesisConfig signingKey delegCert
+           $ mkByronLeaderCredentials genesisConfig signingKey delegCert
 
   where
     deserialiseSigningKey :: LB.ByteString
@@ -202,7 +198,7 @@ data ByronProtocolInstantiationError =
   | DelegationCertificateFilepathNotSpecified
   | GenesisConfigurationError !FilePath !Genesis.ConfigurationError
   | GenesisReadError !FilePath !Genesis.GenesisDataError
-  | PbftError !PBftLeaderCredentialsError
+  | CredentialsError !ByronLeaderCredentialsError
   | SigningKeyDeserialiseFailure !FilePath !DeserialiseFailure
   | SigningKeyFilepathNotSpecified
   deriving Show
@@ -223,8 +219,8 @@ renderByronProtocolInstantiationError pie =
                                                        <> " Error: " <> (Text.pack $ show genesisConfigError)
     GenesisReadError fp err ->  "There was an error parsing the genesis file: " <> toS fp
                                 <> " Error: " <> (Text.pack $ show err)
-    -- TODO: Implement PBftLeaderCredentialsError render function in ouroboros-network
-    PbftError pbftLeaderCredentialsError -> "PBFT leader credentials error: " <> (Text.pack $ show pbftLeaderCredentialsError)
+    -- TODO: Implement ByronLeaderCredentialsError render function in ouroboros-network
+    CredentialsError byronLeaderCredentialsError -> "Byron leader credentials error: " <> (Text.pack $ show byronLeaderCredentialsError)
     SigningKeyDeserialiseFailure fp deserialiseFailure -> "Signing key deserialisation error in: " <> toS fp
                                                            <> " Error: " <> (Text.pack $ show deserialiseFailure)
     SigningKeyFilepathNotSpecified -> "Signing key filepath not specified"

@@ -7,10 +7,10 @@ module Cardano.CLI.Byron.Run
 import           Cardano.Prelude
 
 import           Control.Monad.Trans.Except (ExceptT)
-import           Control.Monad.Trans.Except.Extra (hoistEither, firstExceptT)
+import           Control.Monad.Trans.Except.Extra (firstExceptT, hoistEither)
 import           Data.Semigroup ((<>))
-import qualified Data.Text.Lazy.IO as TL
 import qualified Data.Text.Lazy.Builder as Builder
+import qualified Data.Text.Lazy.IO as TL
 import qualified Formatting as F
 
 import qualified Cardano.Chain.Common as Common
@@ -22,9 +22,7 @@ import           Cardano.Chain.UTxO (TxIn, TxOut)
 import qualified Cardano.Crypto.Hashing as Crypto
 import qualified Cardano.Crypto.Signing as Crypto
 
-import           Cardano.Config.Types
-
-import           Cardano.Api.Typed (NetworkId(..), toByronProtocolMagicId)
+import           Cardano.Api.Typed (NetworkId (..), toByronProtocolMagicId)
 import qualified Cardano.Api.Typed as Typed
 
 import           Cardano.CLI.Byron.Commands
@@ -37,6 +35,7 @@ import           Cardano.CLI.Byron.UpdateProposal
 import           Cardano.CLI.Byron.Vote
 
 import           Cardano.CLI.Helpers
+import           Cardano.CLI.Types
 
 -- | Data type that encompasses all the possible errors of the
 -- Byron client.
@@ -170,13 +169,13 @@ runToVerification era skFp (NewVerificationKeyFile vkFp) = do
   firstExceptT ByronCmdHelpersError $ ensureNewFile TL.writeFile vkFp vKey
 
 runIssueDelegationCertificate
-        :: NetworkId
-        -> CardanoEra
-        -> EpochNumber
-        -> SigningKeyFile
-        -> VerificationKeyFile
-        -> NewCertificateFile
-        -> ExceptT ByronClientCmdError IO ()
+  :: NetworkId
+  -> CardanoEra
+  -> EpochNumber
+  -> SigningKeyFile
+  -> VerificationKeyFile
+  -> NewCertificateFile
+  -> ExceptT ByronClientCmdError IO ()
 runIssueDelegationCertificate nw era epoch issuerSK delegateVK cert = do
   vk <- firstExceptT ByronCmdKeyFailure $ readPaymentVerificationKey delegateVK
   sk <- firstExceptT ByronCmdKeyFailure $ readEraSigningKey era issuerSK
@@ -187,11 +186,11 @@ runIssueDelegationCertificate nw era epoch issuerSK delegateVK cert = do
 
 
 runCheckDelegation
-        :: NetworkId
-        -> CertificateFile
-        -> VerificationKeyFile
-        -> VerificationKeyFile
-        -> ExceptT ByronClientCmdError IO ()
+  :: NetworkId
+  -> CertificateFile
+  -> VerificationKeyFile
+  -> VerificationKeyFile
+  -> ExceptT ByronClientCmdError IO ()
 runCheckDelegation nw cert issuerVF delegateVF = do
   issuerVK <- firstExceptT ByronCmdKeyFailure $ readPaymentVerificationKey issuerVF
   delegateVK <- firstExceptT ByronCmdKeyFailure $ readPaymentVerificationKey delegateVF
@@ -206,14 +205,14 @@ runSubmitTx network fp = do
 
 
 runSpendGenesisUTxO
-        :: GenesisFile
-        -> NetworkId
-        -> CardanoEra
-        -> NewTxFile
-        -> SigningKeyFile
-        -> Common.Address
-        -> NonEmpty TxOut
-        -> ExceptT ByronClientCmdError IO ()
+  :: GenesisFile
+  -> NetworkId
+  -> CardanoEra
+  -> NewTxFile
+  -> SigningKeyFile
+  -> Common.Address
+  -> NonEmpty TxOut
+  -> ExceptT ByronClientCmdError IO ()
 runSpendGenesisUTxO genesisFile nw era (NewTxFile ctTx) ctKey genRichAddr outs = do
     genesis <- firstExceptT ByronCmdGenesisError $ readGenesis genesisFile nw
     sk <- firstExceptT ByronCmdKeyFailure $ readEraSigningKey era ctKey
@@ -222,13 +221,13 @@ runSpendGenesisUTxO genesisFile nw era (NewTxFile ctTx) ctKey genRichAddr outs =
     firstExceptT ByronCmdHelpersError $ ensureNewFileLBS ctTx $ toCborTxAux tx
 
 runSpendUTxO
-        :: NetworkId
-        -> CardanoEra
-        -> NewTxFile
-        -> SigningKeyFile
-        -> NonEmpty TxIn
-        -> NonEmpty TxOut
-        -> ExceptT ByronClientCmdError IO ()
+  :: NetworkId
+  -> CardanoEra
+  -> NewTxFile
+  -> SigningKeyFile
+  -> NonEmpty TxIn
+  -> NonEmpty TxOut
+  -> ExceptT ByronClientCmdError IO ()
 runSpendUTxO nw era (NewTxFile ctTx) ctKey ins outs = do
     sk <- firstExceptT ByronCmdKeyFailure $ readEraSigningKey era ctKey
 
