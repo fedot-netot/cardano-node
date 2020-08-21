@@ -23,7 +23,7 @@ extra-deps:
   - quickcheck-instances-0.3.19
   - base58-bytestring-0.1.0
   - base64-0.4.2
-  - bech32-1.0.2
+  - bech32-1.1.0
   - brick-0.47
   - binary-0.8.7.0
   - bimap-0.4.0
@@ -63,6 +63,9 @@ extra-deps:
   - Unique-0.4.7.6
   - word-wrap-0.4.1
   - websockets-0.12.6.1
+  - primitive-0.7.1.0
+  - aeson-1.4.4.0
+  - time-compat-1.9.3
 
   - git: https://github.com/input-output-hk/cardano-ledger-specs
     commit: 370ee0ad806721fb35a3b8cee645c99e178a6ad9
