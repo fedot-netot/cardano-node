@@ -78,7 +78,7 @@ parseSocketPath :: Text -> Parser SocketPath
 parseSocketPath helpMessage =
   SocketPath <$> strOption
     ( long "socket-path"
-        <> (help $ toS helpMessage)
+        <> help (toS helpMessage)
         <> completer (bashCompleter "file")
         <> metavar "FILEPATH"
     )
@@ -211,7 +211,7 @@ parseVrfKeyFilePath =
 -- | Produce just the brief help header for a given CLI option parser,
 --   without the options.
 parserHelpHeader :: String -> Opt.Parser a -> OptI.Doc
-parserHelpHeader execName = flip (OptI.parserUsage (Opt.prefs mempty)) execName
+parserHelpHeader = flip (OptI.parserUsage (Opt.prefs mempty))
 
 -- | Produce just the options help for a given CLI option parser,
 --   without the header.

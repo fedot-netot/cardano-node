@@ -166,9 +166,9 @@ logTracingVerbosity nc tracer =
     TracingOff -> return ()
     TracingOn traceConf ->
       case traceVerbosity traceConf of
-        NormalVerbosity -> traceWith tracer $ "tracing verbosity = normal verbosity "
-        MinimalVerbosity -> traceWith tracer $ "tracing verbosity = minimal verbosity "
-        MaximalVerbosity -> traceWith tracer $ "tracing verbosity = maximal verbosity "
+        NormalVerbosity -> traceWith tracer "tracing verbosity = normal verbosity "
+        MinimalVerbosity -> traceWith tracer "tracing verbosity = minimal verbosity "
+        MaximalVerbosity -> traceWith tracer "tracing verbosity = maximal verbosity "
 
 -- | Add the application name and unqualified hostname to the logging
 -- layer basic trace.
@@ -204,7 +204,7 @@ traceNodeUpTime tr nodeLaunchTime = do
 
 #ifdef UNIX
 -- | Every 2 seconds get the current peers list and store it to LiveViewBackend
---   (if it's activated) and trace it (for example, for forwarding to an exterrnal process).
+--   (if it's activated) and trace it (for example, for forwarding to an external process).
 handlePeersList
   :: NFData a
   => Trace IO Text
